@@ -19,7 +19,7 @@ Anyone with the link sees the same list. That list is a published snapshot. It c
 
 If the page looks stale, hard-refresh: `Cmd+Shift+R`. GitHub can keep the previous copy for about 10 minutes after an update.
 
-## What a viewer does not need
+## What a reviewer does not need
 
 A viewer does not need the trip logs, a local checkout, or Python. The findings, coordinates, summaries, and trace file names are already in the page.
 
