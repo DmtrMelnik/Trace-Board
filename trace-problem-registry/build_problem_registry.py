@@ -7,6 +7,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import re
 import sys
 from collections import Counter, OrderedDict
@@ -32,6 +33,8 @@ Q_ORDER = (
     "Q10",
     "Q_EV",
     "Q_lane",
+    "Q_oneway",
+    "Q_map",
     "H1",
 )
 
@@ -46,6 +49,8 @@ Q_TITLES = {
     "Q10": "Q10 — Route Incidents",
     "Q_EV": "Q_EV — EV Data",
     "Q_lane": "Q_lane — Lane Guidance & Maneuver Quality",
+    "Q_oneway": "Q_oneway — Against OSM one-way",
+    "Q_map": "Q_map — Map data signals",
     "H1": "H1 — Missing HD lanes",
 }
 
@@ -60,6 +65,8 @@ Q_CATEGORIES = {
     "Q10": "route_incidents",
     "Q_EV": "ev",
     "Q_lane": "lane_guidance",
+    "Q_oneway": "oneway",
+    "Q_map": "map_data",
     "H1": "hd_lanes",
 }
 
@@ -85,6 +92,9 @@ COMMON_FIELDS = (
 
 BLANK_TOKENS = {"", "—", "–", "-", "n/a", "na", "none", "null"}
 SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2, "info": 3}
+# GPS divergence within this distance of a tunnel portal on the same trace
+# is treated as signal loss. A portal from another trace does not hide it.
+TUNNEL_DIV_M = 300
 
 SECTION_RE = re.compile(r"^##[ \t]+(.+?)\s*$", re.M)
 RICO_HEADING_RE = re.compile(r"^###[ \t]+`([^`]+)`\s*—\s*(.+?)\s*$", re.M)
@@ -283,6 +293,341 @@ def parse_arrow_location(text: str) -> Tuple[Optional[float], Optional[float]]:
     return parse_lat_lon_pair(start, order="latlon")
 
 
+def coords_from_text(text: str, order: str = "latlon") -> Tuple[Optional[float], Optional[float]]:
+    """Parse a coordinate pair. Default is lat,lon (analyze_trace Location column)."""
+    if is_blank(text):
+        return None, None
+    chunk = str(text).split(";")[0].split("→")[0].split("->")[0]
+    match = LATLON_PAIR_RE.search(chunk)
+    if not match:
+        return None, None
+    first = float(match.group(1))
+    second = float(match.group(2))
+    if abs(first) > 90 and abs(second) <= 90:
+        lon, lat = first, second
+    elif order == "lonlat":
+        lon, lat = first, second
+    else:
+        lat, lon = first, second
+    if valid_lat_lon(lat, lon):
+        return lat, lon
+    return None, None
+
+
+def attach_coords_from_row_fields(finding: Dict[str, Any]) -> Dict[str, Any]:
+    if valid_lat_lon(finding.get("lat"), finding.get("lon")):
+        return finding
+    meta = finding.get("metadata") or {}
+    preferred = (
+        ("location", "latlon"),
+        ("location (start → end)", "latlon"),
+        ("location (lon,lat)", "lonlat"),
+        ("route coords", "lonlat"),
+        ("coords", "latlon"),
+    )
+    for key, order in preferred:
+        lat, lon = coords_from_text(str(meta.get(key) or ""), order=order)
+        if valid_lat_lon(lat, lon):
+            finding["lat"] = lat
+            finding["lon"] = lon
+            meta = dict(meta)
+            meta["geo_source"] = f"metadata:{key}"
+            finding["metadata"] = meta
+            finding["problem_id"] = assign_problem_id(finding)
+            return finding
+    lat = parse_float(str(meta.get("lat") or ""))
+    lon = parse_float(str(meta.get("lon") or ""))
+    if valid_lat_lon(lat, lon):
+        finding["lat"] = lat
+        finding["lon"] = lon
+        meta = dict(meta)
+        meta["geo_source"] = "metadata:lat,lon"
+        finding["metadata"] = meta
+        finding["problem_id"] = assign_problem_id(finding)
+        return finding
+    for key, value in meta.items():
+        if not isinstance(value, str):
+            continue
+        lat, lon = coords_from_text(value)
+        if valid_lat_lon(lat, lon):
+            finding["lat"] = lat
+            finding["lon"] = lon
+            meta = dict(meta)
+            meta["geo_source"] = f"metadata:{key}"
+            finding["metadata"] = meta
+            finding["problem_id"] = assign_problem_id(finding)
+            return finding
+    summary = str(finding.get("summary") or "")
+    match = LATLON_PAIR_RE.search(summary)
+    if match and "." in match.group(1) and "." in match.group(2):
+        lat, lon = coords_from_text(match.group(0))
+        if valid_lat_lon(lat, lon):
+            finding["lat"] = lat
+            finding["lon"] = lon
+            meta = dict(meta)
+            meta["geo_source"] = "summary"
+            finding["metadata"] = meta
+            finding["problem_id"] = assign_problem_id(finding)
+            return finding
+    return finding
+
+
+def annotation_geojson_paths(report_path: Path) -> List[Path]:
+    stem = report_path.name.replace("-analysis.md", "")
+    direct = report_path.with_name(stem + "-annotations.geojson")
+    found: List[Path] = []
+    if direct.is_file():
+        found.append(direct)
+    uuid_match = re.search(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        stem,
+        re.I,
+    )
+    if uuid_match:
+        for path in report_path.parent.glob(f"*{uuid_match.group(0)}*-annotations.geojson"):
+            if path not in found:
+                found.append(path)
+    return found
+
+
+def load_annotation_points(report_path: Path) -> List[Dict[str, Any]]:
+    points: List[Dict[str, Any]] = []
+    for path in annotation_geojson_paths(report_path):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for feat in data.get("features") or []:
+            geom = feat.get("geometry") or {}
+            coords = geom.get("coordinates") or []
+            geom_type = geom.get("type")
+            if geom_type == "Point":
+                pair = coords
+            elif geom_type in ("LineString", "MultiPoint") and coords:
+                pair = coords[0]
+            elif geom_type == "Polygon" and coords and coords[0]:
+                pair = coords[0][0]
+            else:
+                continue
+            if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                continue
+            lon, lat = pair[0], pair[1]
+            if not valid_lat_lon(lat, lon):
+                continue
+            props = feat.get("properties") or {}
+            points.append(
+                {
+                    "lat": float(lat),
+                    "lon": float(lon),
+                    "label": str(props.get("label") or ""),
+                    "notes": str(props.get("notes") or ""),
+                }
+            )
+    return points
+
+
+def _label_matches_finding(label: str, finding: Dict[str, Any]) -> bool:
+    q = finding.get("q_code") or ""
+    ptype = finding.get("problem_type") or ""
+    if label == "GPS divergence":
+        return q == "Q4" and ptype == "gps_divergence"
+    if label == "off-route":
+        return q == "Q1" and ptype == "off_route"
+    if label == "route-change":
+        return q == "Q1" and ptype == "route_change"
+    if label.startswith("tunnel degraded"):
+        return q == "Q7"
+    if label in {"FN-risk", "over-pred", "congestion"}:
+        return q == "Q3" and ptype == "congestion_signal"
+    if label in {"POI pin", "Routable point", "Directions dest"}:
+        return q == "Q5"
+    if q == "Q_lane" and (label == ptype or label.startswith(ptype)):
+        return True
+    if q == "H1" and "hd:missing" in label:
+        return True
+    if q == "Q10" and any(
+        token in label.lower()
+        for token in ("construction", "lane_restriction", "road_closure", "incident", "closure")
+    ):
+        return True
+    if q == "Q_feedback" and label.lower() in {"info", "feedback", "user feedback"}:
+        return True
+    return False
+
+
+def _peak_m_from_notes(notes: str) -> Optional[int]:
+    match = re.search(r"peak:\s*(\d+)\s*m", notes or "", re.I)
+    return int(match.group(1)) if match else None
+
+
+def load_divergence_lines(report_path: Path) -> List[Dict[str, Any]]:
+    """Short GPS (drive) and map-matched polylines emitted beside each Q4 pin."""
+    lines: List[Dict[str, Any]] = []
+    for path in annotation_geojson_paths(report_path):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for feat in data.get("features") or []:
+            geom = feat.get("geometry") or {}
+            if geom.get("type") != "LineString":
+                continue
+            props = feat.get("properties") or {}
+            label = str(props.get("label") or "")
+            if label not in (
+                "GPS divergence drive",
+                "GPS divergence matched",
+                "Missed road drive",
+                "Missed road osm",
+                "Detour drive",
+                "Detour route",
+            ):
+                continue
+            coords = [
+                [float(pair[0]), float(pair[1])]
+                for pair in (geom.get("coordinates") or [])
+                if isinstance(pair, (list, tuple)) and len(pair) >= 2
+                and valid_lat_lon(pair[1], pair[0])
+            ]
+            if len(coords) < 2:
+                continue
+            lines.append({
+                "label": label,
+                "notes": str(props.get("notes") or ""),
+                "coordinates": coords,
+            })
+    return lines
+
+
+def attach_divergence_lines(
+    findings: List[Dict[str, Any]],
+    lines: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not lines:
+        return findings
+    grouped: Dict[str, Dict[str, List[List[float]]]] = {}
+    for line in lines:
+        match = re.search(r"t:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)", line.get("notes") or "")
+        if not match:
+            continue
+        kind = "div"
+        if line["label"].startswith("Detour"):
+            kind = "detour"
+        elif line["label"].startswith("Missed"):
+            kind = "missed"
+        slot = grouped.setdefault(f"{match.group(1)}|{kind}", {})
+        if line["label"] in ("GPS divergence drive", "Missed road drive", "Detour drive"):
+            slot["gps_line"] = line["coordinates"]
+        elif line["label"] == "GPS divergence matched":
+            slot["matched_line"] = line["coordinates"]
+        elif line["label"] == "Detour route":
+            slot["route_line"] = line["coordinates"]
+        else:
+            slot["road_line"] = line["coordinates"]
+    if not grouped:
+        return findings
+    for finding in findings:
+        ts = finding.get("timestamp_utc") or ""
+        if finding.get("problem_type") == "node_detour":
+            slot = grouped.get(f"{ts}|detour")
+        elif finding.get("problem_type") == "missed_road":
+            slot = grouped.get(f"{ts}|missed")
+        elif finding.get("problem_type") == "gps_divergence":
+            slot = grouped.get(f"{ts}|div")
+        else:
+            continue
+        if not slot:
+            continue
+        meta = dict(finding.get("metadata") or {})
+        if slot.get("gps_line"):
+            meta["gps_line"] = slot["gps_line"]
+        if slot.get("matched_line"):
+            meta["matched_line"] = slot["matched_line"]
+        if slot.get("road_line"):
+            meta["road_line"] = slot["road_line"]
+        if slot.get("route_line"):
+            meta["route_line"] = slot["route_line"]
+        finding["metadata"] = meta
+        finding["problem_id"] = assign_problem_id(finding)
+    return findings
+
+
+def enrich_from_annotations(
+    findings: List[Dict[str, Any]], points: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    unused = list(points)
+    for finding in findings:
+        if valid_lat_lon(finding.get("lat"), finding.get("lon")):
+            continue
+        ts = (finding.get("timestamp_utc") or "")[:19].replace("T", " ")
+        dist = parse_float(str((finding.get("metadata") or {}).get("worst dist") or ""))
+        best_i = None
+        best_score = -1
+        for i, pt in enumerate(unused):
+            if not _label_matches_finding(pt["label"], finding):
+                continue
+            score = 1
+            if ts and ts in (pt["notes"] or ""):
+                score += 5
+            peak = _peak_m_from_notes(pt["notes"])
+            if dist is not None and peak is not None and abs(peak - dist) <= 1:
+                score += 4
+            if score > best_score:
+                best_score = score
+                best_i = i
+        if best_i is None:
+            continue
+        pt = unused.pop(best_i)
+        finding["lat"] = pt["lat"]
+        finding["lon"] = pt["lon"]
+        meta = dict(finding.get("metadata") or {})
+        meta["geo_source"] = "annotations.geojson"
+        finding["metadata"] = meta
+        finding["problem_id"] = assign_problem_id(finding)
+    return findings
+
+
+def fill_missing_coords_from_report(
+    findings: List[Dict[str, Any]],
+    extra_points: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Pin leftover rows to other points from the same trace (table centroid, else annotations)."""
+    extra_points = extra_points or []
+    by_report: Dict[str, List[Dict[str, Any]]] = {}
+    for item in findings:
+        by_report.setdefault(item.get("report_file") or "", []).append(item)
+    extra_lat = extra_lon = None
+    extra_ok = [pt for pt in extra_points if valid_lat_lon(pt.get("lat"), pt.get("lon"))]
+    if extra_ok:
+        extra_lat = sum(float(pt["lat"]) for pt in extra_ok) / len(extra_ok)
+        extra_lon = sum(float(pt["lon"]) for pt in extra_ok) / len(extra_ok)
+    for group in by_report.values():
+        geocoded = [
+            item
+            for item in group
+            if valid_lat_lon(item.get("lat"), item.get("lon"))
+        ]
+        source = "report_centroid"
+        if geocoded:
+            lat = sum(float(item["lat"]) for item in geocoded) / len(geocoded)
+            lon = sum(float(item["lon"]) for item in geocoded) / len(geocoded)
+        elif extra_lat is not None:
+            lat, lon = extra_lat, extra_lon
+            source = "annotations_centroid"
+        else:
+            continue
+        for item in group:
+            if valid_lat_lon(item.get("lat"), item.get("lon")):
+                continue
+            item["lat"] = lat
+            item["lon"] = lon
+            meta = dict(item.get("metadata") or {})
+            meta["geo_source"] = source
+            item["metadata"] = meta
+            item["problem_id"] = assign_problem_id(item)
+    return findings
+
+
 def has_warning(text: str) -> bool:
     return "⚠️" in (text or "")
 
@@ -435,7 +780,7 @@ def make_finding(
 def q1_severity(row_type: str, eta: str) -> str:
     lowered = (row_type or "").lower()
     if "no reroute" in lowered:
-        return "high"
+        return "medium"
     if "same route" in lowered or has_warning(eta) or "off-route" in lowered:
         return "medium"
     if has_warning(row_type):
@@ -484,6 +829,8 @@ def parse_q1(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         ts = rowget(row, "time (utc)", "time")
         reason = rowget(row, "reason")
         context = rowget(row, "context")
+        loc = rowget(row, "location")
+        lat, lon = coords_from_text(loc)
         ptype = "off_route" if "off-route" in row_type.lower() else "route_change"
         summary = f"Q1 {row_type}"
         if reason and not is_blank(reason):
@@ -498,6 +845,8 @@ def parse_q1(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                 q1_severity(row_type, eta),
                 summary,
                 timestamp=ts,
+                lat=lat,
+                lon=lon,
                 metadata={**shared, **row_metadata(row), "context": context},
             )
         )
@@ -563,7 +912,7 @@ def parse_q2(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                 ctx,
                 "Q2",
                 "poor_arrival",
-                "high",
+                "medium",
                 f"Driver stopped {dist} from destination",
                 timestamp=drive_end,
                 metadata={**shared, "distance_from_destination": dist},
@@ -697,10 +1046,9 @@ def parse_bold_count(body: str, label: str) -> Optional[int]:
 
 
 def q4_div_severity(dist_m: Optional[float]) -> str:
+    # GPS mismatch is a positioning symptom, not a map-data defect.
     if dist_m is None:
         return "low"
-    if dist_m >= 30:
-        return "high"
     if dist_m >= 15:
         return "medium"
     return "low"
@@ -721,6 +1069,7 @@ def parse_q4(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         dist_raw = rowget(row, "worst dist")
         dist_m = parse_float(dist_raw)
         duration = rowget(row, "duration")
+        lat, lon = coords_from_text(rowget(row, "location"))
         summary = f"GPS / map-matched divergence {dist_raw or 'unknown'}"
         if duration and not is_blank(duration):
             summary += f" lasting {duration}"
@@ -735,6 +1084,8 @@ def parse_q4(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                 q4_div_severity(dist_m),
                 summary,
                 timestamp=ts,
+                lat=lat,
+                lon=lon,
                 metadata=meta,
             )
         )
@@ -746,7 +1097,7 @@ def parse_q4(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                 ctx,
                 "Q4",
                 "navigator_fallback",
-                "high",
+                "medium",
                 f"Navigator fallback to raw GPS: {fallback}",
                 metadata={"fallback_count": fallback},
             )
@@ -771,7 +1122,7 @@ def parse_q4(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                 ctx,
                 "Q4",
                 "map_matcher_teleport",
-                "high",
+                "medium",
                 f"Map-matcher teleports: {teleports}",
                 metadata={"teleport_count": teleports},
             )
@@ -795,6 +1146,10 @@ def parse_q5(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         summary = f"Search attempt {query or '(no query)'} → {results or 'n/a'} results"
         if selected_hit:
             summary += f"; selected {selected}"
+        extra = row_metadata(row)
+        extra["query"] = query or extra.get("query") or ""
+        extra["results"] = results or extra.get("results") or ""
+        extra["selected"] = selected if selected else "—"
         findings.append(
             make_finding(
                 ctx,
@@ -804,7 +1159,7 @@ def parse_q5(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                 summary,
                 timestamp=ts,
                 informational=informational,
-                metadata=row_metadata(row),
+                metadata=extra,
             )
         )
 
@@ -859,6 +1214,56 @@ def parse_q_feedback(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [f for f in findings if f]
 
 
+def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    radius = 6371000.0
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * radius * math.asin(math.sqrt(a))
+
+
+def tunnel_anchors_from_body(body: str) -> List[Tuple[float, float]]:
+    """Every tunnel portal in the Q7 table, including clean sections that are not findings."""
+    if not body or "No tunnel sections detected" in body:
+        return []
+    _, rows = first_table(body, ["degraded?", "start (utc)"])
+    if not rows:
+        _, rows = first_table(body, ["start (utc)", "duration"])
+    anchors: List[Tuple[float, float]] = []
+    for row in rows:
+        lat, lon = coords_from_text(rowget(row, "location"))
+        if valid_lat_lon(lat, lon):
+            anchors.append((float(lat), float(lon)))
+    return anchors
+
+
+def drop_divergence_near_tunnels(
+    findings: Sequence[Dict[str, Any]],
+    anchors: Sequence[Tuple[float, float]],
+) -> List[Dict[str, Any]]:
+    """Drop GPS divergence only against tunnel portals from the same trace."""
+    if not anchors:
+        return list(findings)
+    kept: List[Dict[str, Any]] = []
+    for item in findings:
+        if item.get("problem_type") != "gps_divergence":
+            kept.append(item)
+            continue
+        lat, lon = item.get("lat"), item.get("lon")
+        if not valid_lat_lon(lat, lon):
+            kept.append(item)
+            continue
+        if any(
+            haversine_m(float(lat), float(lon), tlat, tlon) <= TUNNEL_DIV_M
+            for tlat, tlon in anchors
+        ):
+            continue
+        kept.append(item)
+    return kept
+
+
 def parse_q7(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     if "No tunnel sections detected" in body:
         return []
@@ -875,6 +1280,7 @@ def parse_q7(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         worst_at = rowget(row, "worst at (utc)")
         div = rowget(row, "worst divergence")
         duration = rowget(row, "duration")
+        lat, lon = coords_from_text(rowget(row, "location"))
         if degraded:
             summary = f"Degraded tunnel positioning ({duration or 'duration n/a'})"
             if div and not is_blank(div):
@@ -884,9 +1290,11 @@ def parse_q7(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                     ctx,
                     "Q7",
                     "tunnel_degraded",
-                    "high",
+                    "medium",
                     summary,
                     timestamp=worst_at or ts,
+                    lat=lat,
+                    lon=lon,
                     metadata=row_metadata(row),
                 )
             )
@@ -900,6 +1308,8 @@ def parse_q7(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "info",
                     summary,
                     timestamp=ts,
+                    lat=lat,
+                    lon=lon,
                     informational=True,
                     metadata=row_metadata(row),
                 )
@@ -908,20 +1318,8 @@ def parse_q7(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def q10_incident_severity(row: Dict[str, str]) -> str:
-    itype = rowget(row, "type").lower()
-    passed = rowget(row, "driver passed?")
-    deviation = rowget(row, "deviation?")
-    impact = rowget(row, "impact").lower()
-    traversed = "yes" in passed.lower()
-    if "road_closure" in itype or "closure" in itype:
-        return "high"
-    if traversed and has_warning(deviation):
-        return "high" if "off-route" in deviation.lower() else "medium"
-    if traversed and impact == "major":
-        return "medium"
-    if traversed:
-        return "low"
-    return "low"
+    # Incidents, lane restrictions, and closures are map data.
+    return "high"
 
 
 def parse_q10(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1099,7 +1497,9 @@ def parse_q_lane(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
             for row in rows:
                 ts = rowget(row, "time (utc)")
                 loc = rowget(row, "location")
-                lat, lon = parse_lat_lon_pair(loc, order="latlon")
+                lat, lon = coords_from_text(loc)
+                if not valid_lat_lon(lat, lon):
+                    lat, lon = parse_lat_lon_pair(loc, order="latlon")
                 detector = rowget(row, "detector")
                 outcome = rowget(row, "outcome")
                 detail = rowget(row, "detail")
@@ -1112,6 +1512,8 @@ def parse_q_lane(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                 if detail and not is_blank(detail):
                     summary += f": {detail}"
                 sev = rico_severity(outcome)
+                if sev != "info":
+                    sev = "high"
                 findings.append(
                     make_finding(
                         ctx,
@@ -1155,9 +1557,7 @@ def parse_h1(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
             summary += f", {dist}"
         if maneuver and not is_blank(maneuver):
             summary += f"; maneuver {maneuver}"
-        sev = "high" if genuine and has_warning(maneuver) else (
-            "medium" if genuine else "info"
-        )
+        sev = "high" if genuine else "info"
         findings.append(
             make_finding(
                 ctx,
@@ -1175,6 +1575,67 @@ def parse_h1(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [f for f in findings if f]
 
 
+def parse_q_oneway(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if "check skipped" in body or "No sustained drive against" in body:
+        return []
+    _, rows = first_table(body, ["time (utc)", "gps bearing"])
+    findings: List[Dict[str, Any]] = []
+    for row in rows:
+        ts = rowget(row, "time (utc)")
+        lat, lon = coords_from_text(rowget(row, "location"))
+        gps_b = rowget(row, "gps bearing")
+        legal_b = rowget(row, "legal bearing")
+        dist = rowget(row, "distance")
+        way = rowget(row, "osm way")
+        findings.append(
+            make_finding(
+                ctx,
+                "Q_oneway",
+                "oneway_against",
+                "high",
+                f"Against OSM one-way: GPS {gps_b} vs legal {legal_b} for {dist}",
+                timestamp=ts,
+                lat=lat,
+                lon=lon,
+                metadata={
+                    "gps_bearing": gps_b,
+                    "legal_bearing": legal_b,
+                    "distance": dist,
+                    "osm_way": way,
+                },
+            )
+        )
+    return [f for f in findings if f]
+
+
+def parse_q_map(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if "No extra map-data signals" in body:
+        return []
+    _, rows = first_table(body, ["time (utc)", "type", "what to look at"])
+    findings: List[Dict[str, Any]] = []
+    for row in rows:
+        kind = rowget(row, "type")
+        if not kind:
+            continue
+        ts = rowget(row, "time (utc)")
+        lat, lon = coords_from_text(rowget(row, "location"))
+        look = rowget(row, "what to look at")
+        findings.append(
+            make_finding(
+                ctx,
+                "Q_map",
+                kind,
+                "high",
+                look or kind,
+                timestamp=ts,
+                lat=lat,
+                lon=lon,
+                metadata={"signal": kind},
+            )
+        )
+    return [f for f in findings if f]
+
+
 SECTION_PARSERS: List[Tuple[str, Callable[[str, Dict[str, Any]], List[Dict[str, Any]]]]] = [
     ("Q1", parse_q1),
     ("Q2", parse_q2),
@@ -1186,6 +1647,8 @@ SECTION_PARSERS: List[Tuple[str, Callable[[str, Dict[str, Any]], List[Dict[str, 
     ("Q10", parse_q10),
     ("Q_EV", parse_q_ev),
     ("Q_lane", parse_q_lane),
+    ("Q_oneway", parse_q_oneway),
+    ("Q_map", parse_q_map),
     ("H1", parse_h1),
 ]
 
@@ -1203,12 +1666,12 @@ def parse_report(
     path: Path,
     input_dir: Path,
     include_info: bool,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]], List[Tuple[float, float]]]:
     errors: List[Dict[str, str]] = []
     try:
         text = path.read_text(encoding="utf-8")
     except Exception as exc:
-        return [], [{"file": str(path), "error": f"read failed: {exc}"}]
+        return [], [{"file": str(path), "error": f"read failed: {exc}"}], []
 
     try:
         rel = str(path.relative_to(input_dir))
@@ -1246,7 +1709,14 @@ def parse_report(
                     "error": f"{type(exc).__name__}: {exc}",
                 }
             )
-    return findings, errors
+    findings = [attach_coords_from_row_fields(item) for item in findings]
+    points = load_annotation_points(path)
+    findings = enrich_from_annotations(findings, points)
+    findings = fill_missing_coords_from_report(findings, points)
+    findings = attach_divergence_lines(findings, load_divergence_lines(path))
+    anchors = tunnel_anchors_from_body(sections.get("Q7") or "")
+    findings = drop_divergence_near_tunnels(findings, anchors)
+    return findings, errors, anchors
 
 
 def sort_findings(findings: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1527,7 +1997,7 @@ def run(
     parse_errors: List[Dict[str, str]] = []
     files_parsed = 0
     for report in reports:
-        findings, errors = parse_report(report, input_dir, include_info)
+        findings, errors, _anchors = parse_report(report, input_dir, include_info)
         parse_errors.extend(errors)
         all_findings.extend(findings)
         files_parsed += 1
@@ -1564,7 +2034,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--input-dir",
         required=True,
-        help="Directory to scan recursively for *-analysis.md reports.",
+        help="Directory to scan recursively for *-analysis.md. For the explorer, use input-traces/real only (skip simulated/short/stationary).",
     )
     parser.add_argument(
         "--output-dir",

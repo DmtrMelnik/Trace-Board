@@ -1,0 +1,179 @@
+/* ===== polish.css — a light touch over Assembly (load AFTER assembly.min.css
+   and cera-fallback.css). Small, restrained refinements only: no gradients,
+   glows, glass, blur, or oversized radii. Keeps the real Mapbox crisp look. ===== */
+
+/* Cera Pro — Mapbox's brand display face (commercial, TypeMates). INTERNAL /
+   licensed use only. Drop YOUR purchased woff2 (from your Cera Pro license, not a
+   third-party font mirror) into a ./fonts/ folder next to the page — three weights
+   is enough: Regular/Medium/Bold. Headings pick them up automatically. Until the
+   files are present, the Outfit fallback from cera-fallback.css renders. */
+@font-face { font-family:'Cera Pro'; src:url('../fonts/CeraPro-Regular.woff2') format('woff2'); font-weight:400; font-display:swap; }
+@font-face { font-family:'Cera Pro'; src:url('../fonts/CeraPro-Medium.woff2') format('woff2');  font-weight:500 600; font-display:swap; }
+@font-face { font-family:'Cera Pro'; src:url('../fonts/CeraPro-Bold.woff2') format('woff2');    font-weight:700 800; font-display:swap; }
+
+:root {
+  --mb-brand-blue: #4264fb;
+  --mb-radius: 8px;
+  --mb-radius-lg: 12px;
+  --mb-card-shadow: 0 1px 2px rgba(16,24,40,.04), 0 12px 28px -10px rgba(16,24,40,.12);
+  --mb-card-shadow-lift: 0 2px 6px rgba(16,24,40,.06), 0 22px 42px -14px rgba(16,24,40,.18);
+}
+
+/* Display type + smoothing */
+body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+h1,h2,h3,h4,.txt-h1,.txt-h2,.txt-h3,.txt-h4,.txt-display {
+  font-family: var(--mb-display, 'Cera Pro', 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif);
+  letter-spacing: -0.021em; line-height: 1.1;
+}
+.lede { color:#5a6672; line-height:1.6; }
+.measure { max-width: 36em; }
+
+/* Logo — fixed box so it never stretches as a flex child */
+.mb-logo { height:24px; width:108px; flex:0 0 auto; display:block; }
+
+/* Islands: borderless, soft shadow, rounded */
+.card { background:#fff; border:0; border-radius:var(--mb-radius); box-shadow:var(--mb-card-shadow); }
+.card--lift { transition: box-shadow .25s cubic-bezier(.4,0,.2,1), transform .25s cubic-bezier(.4,0,.2,1); }
+.card--lift:hover { box-shadow:var(--mb-card-shadow-lift); transform: translateY(-2px); }
+
+/* Small tinted tile behind a card's icon */
+.icon-tile { width:44px; height:44px; border-radius:10px; background:#eaf0ff; display:flex; align-items:center; justify-content:center; }
+
+/* Pill buttons — keep Assembly's button (color/size/hover), only round it */
+.btn-pill { border-radius:999px; }
+
+/* Calm placeholder where imagery / a live map will go */
+.img-ph { background:#eef1f4; border-radius:var(--mb-radius-lg); display:flex; align-items:center; justify-content:center; color:#8a949e; font-size:.8125rem; letter-spacing:.02em; }
+
+@media (prefers-reduced-motion: reduce) {
+  .card--lift, .card--lift:hover { transition:none; transform:none; }
+}
+
+/* ============================================================================
+   Consistency + mobile layer. Use these named classes instead of inline
+   font-size / ad-hoc padding so every page scales the same way on phones.
+   ========================================================================== */
+
+/* Fluid display type — use INSTEAD of inline font-size. Scales down on mobile. */
+.eyebrow    { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--mb-brand-blue); }
+.display-1  { font-size:clamp(2.25rem, 6vw, 3.5rem);   line-height:1.03; }  /* hero H1 */
+.display-2  { font-size:clamp(1.75rem, 4vw, 2.5rem);   line-height:1.08; }  /* section H2 */
+.display-3  { font-size:clamp(1.375rem, 2.6vw, 1.75rem); line-height:1.12; } /* card / CTA H3 */
+
+/* Fluid vertical rhythm — use `.section` INSTEAD of py120 so it tightens on phones. */
+.section { padding-top:clamp(56px, 8vw, 120px); padding-bottom:clamp(56px, 8vw, 120px); }
+
+/* ---- Responsive header nav (hamburger under 800px) ------------------------- */
+.nav-links { display:flex; align-items:center; }
+.nav-toggle { display:none; align-items:center; justify-content:center; width:40px; height:40px;
+  border:0; background:transparent; color:#0e1012; cursor:pointer; border-radius:8px; }
+.nav-toggle:hover { background:#f2f4f6; }
+@media (max-width:799px){
+  .nav-toggle { display:inline-flex; }
+  .nav-links {
+    position:absolute; left:0; right:0; top:100%; display:none;
+    flex-direction:column; align-items:stretch;
+    background:#fff; border-bottom:1px solid rgba(14,16,18,.08);
+    padding:8px 24px 16px; box-shadow:var(--mb-card-shadow);
+  }
+  .nav-links.is-open { display:flex; }
+  .nav-links a { padding:12px 0; }
+}
+
+/* ---- Mobile app shell (for phone-frame UI mockups / native-style screens) --- */
+.phone   { width:390px; max-width:100%; margin:0 auto; background:#fff; border:1px solid rgba(14,16,18,.08);
+  border-radius:28px; overflow:hidden; box-shadow:var(--mb-card-shadow-lift); }
+.appbar  { height:52px; display:flex; align-items:center; justify-content:space-between; padding:0 16px;
+  border-bottom:1px solid rgba(14,16,18,.08); background:#fff; }
+.tabbar  { display:flex; border-top:1px solid rgba(14,16,18,.08); background:#fff; }
+.tabbar a { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px;
+  padding:8px 0; font-size:.6875rem; color:#8a949e; text-decoration:none; }
+.tabbar a.is-active { color:var(--mb-brand-blue); }
+
+/* ============================================================================
+   Anchors, links & micro-interactions — one consolidated layer, all archetypes.
+   Restrained by design: 150–250ms ease, 1–4px movement, neutral shadows.
+   No bounce, no parallax, no glows — Mapbox stays crisp.
+   ========================================================================== */
+
+/* Smooth in-page scrolling; anchor targets clear the 64px sticky header */
+html { scroll-behavior:smooth; }
+[id] { scroll-margin-top:88px; }
+
+/* Base transition on interactive elements */
+a, .link, .btn, .nav-toggle {
+  transition: color .18s ease, background-color .18s ease, border-color .18s ease,
+              box-shadow .18s ease, transform .18s ease, opacity .18s ease;
+}
+
+/* Links are NEVER plain-underlined. Color + motion carry the affordance. */
+a { text-decoration:none; }
+/* Assembly ships `.prose a:not(.unprose){text-decoration:underline}` — the
+   explicit `text-decoration:none` below (same specificity, later in cascade)
+   is what actually kills it. Do not remove it. */
+.prose a:not(.btn):not(.anchor-link) {
+  color:#0f71fa; font-weight:600; text-decoration:none;
+}
+/* Body-copy links draw a 1px underline on hover. Interaction-classed links
+   (.link-arrow/.link-ul/.toc-link) are excluded — they have their own hover. */
+.prose a:not(.btn):not(.anchor-link):not(.link-arrow):not(.link-ul):not(.toc-link) {
+  background-image:linear-gradient(currentColor,currentColor);
+  background-size:0 1px; background-position:0 100%; background-repeat:no-repeat;
+  transition:background-size .2s ease, color .15s ease;
+}
+.prose a:not(.btn):not(.anchor-link):not(.link-arrow):not(.link-ul):not(.toc-link):hover {
+  background-size:100% 1px;
+}
+.prose--dark a:not(.btn):not(.anchor-link) { color:#7aa7ff; }
+.link-ul { position:relative; }           /* same sliding underline for non-prose links */
+.link-ul::after { content:''; position:absolute; left:0; right:0; bottom:-2px; height:1px;
+  background:currentColor; transform:scaleX(0); transform-origin:left;
+  transition:transform .22s cubic-bezier(.4,0,.2,1); }
+.link-ul:hover::after { transform:scaleX(1); }
+
+/* "More →" links — wrap the arrow in <span class='arr'>→</span>; it nudges on hover */
+.link-arrow .arr { display:inline-block; transition:transform .18s cubic-bezier(.4,0,.2,1); }
+.link-arrow:hover .arr { transform:translateX(3px); }
+
+/* Header nav: soft chip hover */
+.nav-links a { border-radius:6px; }
+.nav-links a:hover { background:#f2f4f6; color:#0f71fa !important; }
+
+/* Buttons: quiet 1px lift; icon tiles scale gently inside lifting cards */
+.btn-pill:hover  { transform:translateY(-1px); box-shadow:0 3px 10px -4px rgba(16,24,40,.28); }
+.btn-pill:active { transform:translateY(0); box-shadow:none; }
+.btn--stroke.btn-pill:hover { background:#f0f5ff; }
+.icon-tile { transition:transform .2s ease; }
+.card--lift:hover .icon-tile { transform:scale(1.06); }
+
+/* Sticky-TOC links with a blue active rail (scrollspy snippet in components.md
+   toggles .is-active) */
+.toc-link { display:block; padding:5px 12px 5px 10px; border-left:2px solid transparent;
+  color:#757d82; font-size:.8125rem; border-radius:0 6px 6px 0;
+  transition:color .15s ease, border-color .15s ease, background-color .15s ease; }
+.toc-link:hover { color:#1a2224; background:#f7f8f8; }
+.toc-link.is-active { color:var(--mb-brand-blue); border-left-color:var(--mb-brand-blue);
+  font-weight:600; background:#f5f8ff; }
+
+/* Headings that reveal a copyable # anchor on hover — the ONE canonical pattern:
+   <h2 id='x' class='… anchor-heading'>Title <a href='#x' class='anchor-link'>#</a></h2> */
+.anchor-heading .anchor-link { opacity:0; margin-left:10px; font-weight:400;
+  color:var(--mb-brand-blue); transition:opacity .15s ease; }
+.anchor-heading:hover .anchor-link, .anchor-heading .anchor-link:focus { opacity:.75; }
+
+/* Copy button fading in over dark code blocks (JS snippet in components.md) */
+.code-wrap { position:relative; }
+.code-copy { position:absolute; top:10px; right:10px; border:0; cursor:pointer;
+  border-radius:6px; padding:6px 10px; font-size:.75rem; font-weight:600;
+  background:rgba(255,255,255,.08); color:#fff; opacity:0;
+  transition:opacity .15s ease, background-color .15s ease; }
+.code-wrap:hover .code-copy, .code-copy:focus { opacity:1; }
+.code-copy:hover { background:rgba(255,255,255,.16); }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior:auto; }
+  a, .link, .btn, .btn-pill, .nav-toggle, .link-ul::after, .link-arrow .arr,
+  .toc-link, .icon-tile, .prose a:not(.btn), .anchor-heading .anchor-link,
+  .code-copy { transition:none !important; }
+  .btn-pill:hover, .card--lift:hover .icon-tile { transform:none; }
+}
