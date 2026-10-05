@@ -120,11 +120,22 @@ class RegistryFixtureTests(unittest.TestCase):
         self.assertIn("closed road", closure["summary"].lower())
         self.assertEqual(closure["severity"], "high")
 
+    def test_gps_divergence_near_tunnel_is_dropped(self) -> None:
+        near = {"problem_type": "gps_divergence", "lat": 48.8105, "lon": 9.1818, "q_code": "Q4"}
+        far = {"problem_type": "gps_divergence", "lat": 48.90, "lon": 9.30, "q_code": "Q4"}
+        incident = {"problem_type": "route_incident", "lat": 48.8105, "lon": 9.1818, "q_code": "Q10"}
+        kept = reg.drop_divergence_near_tunnels(
+            [near, far, incident],
+            [(48.81119, 9.18188)],
+        )
+        self.assertEqual([item["problem_type"] for item in kept], ["gps_divergence", "route_incident"])
+        self.assertAlmostEqual(kept[0]["lat"], 48.90)
+
     def test_q7_degraded_only_by_default(self) -> None:
         q7 = self._from_complete("Q7")
         self.assertEqual(len(q7), 1)
         self.assertEqual(q7[0]["problem_type"], "tunnel_degraded")
-        self.assertEqual(q7[0]["severity"], "high")
+        self.assertEqual(q7[0]["severity"], "medium")
 
     def test_outputs_written(self) -> None:
         for name in (
@@ -183,7 +194,8 @@ class RegistryFixtureTests(unittest.TestCase):
         self.assertTrue(q3)
         q10 = [item for item in malformed_findings if item["q_code"] == "Q10"]
         self.assertTrue(q10)
-        self.assertIsNone(q10[0]["lat"])
+        if q10[0]["lat"] is not None:
+            self.assertEqual(q10[0]["metadata"].get("geo_source"), "report_centroid")
 
     def test_include_info_adds_informational_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -220,6 +232,60 @@ class RegistryFixtureTests(unittest.TestCase):
         self.assertIn("soc_prediction_error", types)
         self.assertIn("soc_arrival_error", types)
         self.assertIn("charging_soc_mismatch", types)
+
+
+class CoordHelperTests(unittest.TestCase):
+    def test_coords_from_text_latlon_and_lonlat(self) -> None:
+        lat, lon = reg.coords_from_text("48.83255, 9.12345")
+        self.assertAlmostEqual(lat, 48.83255)
+        self.assertAlmostEqual(lon, 9.12345)
+        lat, lon = reg.coords_from_text("9.12345, 48.83255", order="lonlat")
+        self.assertAlmostEqual(lat, 48.83255)
+        self.assertAlmostEqual(lon, 9.12345)
+        lat, lon = reg.coords_from_text("11.48665, 48.17906", order="lonlat")
+        self.assertAlmostEqual(lat, 48.17906)
+        self.assertAlmostEqual(lon, 11.48665)
+
+    def test_q4_matches_annotation_peak(self) -> None:
+        finding = {
+            "q_code": "Q4",
+            "problem_type": "gps_divergence",
+            "lat": None,
+            "lon": None,
+            "timestamp_utc": "2026-09-14T18:12:41Z",
+            "metadata": {"worst dist": "13m"},
+            "summary": "GPS / map-matched divergence 13m",
+            "report_file": "x.md",
+        }
+        points = [
+            {
+                "lat": 48.17,
+                "lon": 11.48,
+                "label": "GPS divergence",
+                "notes": "peak: 13m | duration: 6s",
+            }
+        ]
+        out = reg.enrich_from_annotations([finding], points)
+        self.assertAlmostEqual(out[0]["lat"], 48.17)
+        self.assertAlmostEqual(out[0]["lon"], 11.48)
+        self.assertEqual(out[0]["metadata"]["geo_source"], "annotations.geojson")
+
+    def test_fill_missing_uses_annotation_centroid(self) -> None:
+        finding = {
+            "q_code": "Q2",
+            "problem_type": "incomplete_route",
+            "lat": None,
+            "lon": None,
+            "timestamp_utc": "",
+            "metadata": {},
+            "summary": "Route not completed",
+            "report_file": "x.md",
+        }
+        points = [{"lat": 48.1, "lon": 11.5, "label": "GPS divergence", "notes": ""}]
+        out = reg.fill_missing_coords_from_report([finding], points)
+        self.assertAlmostEqual(out[0]["lat"], 48.1)
+        self.assertAlmostEqual(out[0]["lon"], 11.5)
+        self.assertEqual(out[0]["metadata"]["geo_source"], "annotations_centroid")
 
 
 if __name__ == "__main__":

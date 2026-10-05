@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <title>Trace Board</title>
+  <link href='css/assembly.min.css' rel='stylesheet'>
+  <link href='css/cera-fallback.css' rel='stylesheet'>
+  <link href='css/polish.css' rel='stylesheet'>
+  <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'>
+  <link rel='stylesheet' href='https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css'>
+  <link rel='stylesheet' href='https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css'>
+    <style>
+    #map { height: 400px; border-radius: 12px; }
+    .result-list { height: min(52vh, 560px); overflow: auto; }
+    .detail-scroll { max-height: min(36vh, 380px); overflow: auto; }
+    #detail-card { min-height: 280px; }
+    .pin-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+    .row-num { width: 36px; flex: 0 0 auto; font-variant-numeric: tabular-nums; color: #757d82; }
+    .result-row.is-active { outline: 2px solid #0f71fa; outline-offset: -2px; }
+    .result-row.is-reviewed { opacity: 0.55; }
+    .review-check { flex: 0 0 auto; display: flex; align-items: center; margin-right: 10px; }
+    .review-check input { width: 16px; height: 16px; cursor: pointer; }
+    .dd-link { flex: 0 0 auto; margin-left: 8px; text-decoration: none; white-space: nowrap; }
+    .trace-block-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: #fff; border: 0; border-left: 3px solid #4264fb; padding: 8px 10px; margin: 10px 0 6px; border-radius: 0 8px 8px 0; box-shadow: 0 1px 0 rgba(14,16,18,.06); cursor: pointer; }
+    .trace-block-head.is-active { background: #e7f0ff; box-shadow: inset 0 0 0 2px #0f71fa; }
+    .trace-block-chevron { width: 14px; flex: 0 0 auto; color: #4264fb; }
+    .tab-row { overflow-x: auto; }
+    .q-chip { cursor: pointer; }
+    .leaflet-popup-content { font-size: 13px; line-height: 1.4; margin: 10px 14px; }
+    .legend-swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+    #open-trace { white-space: nowrap; }
+    .repeat-mark { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: #e7f0ff; color: #0f71fa; font-size: 11px; font-weight: 700; letter-spacing: 0; vertical-align: 1px; }
+    .trace-filename { word-break: break-all; user-select: text; cursor: text; color: #0f71fa; }
+    .trace-filename { word-break: break-all; }
+    .trace-findings { max-height: min(56vh, 640px); overflow: auto; }
+    .meta-json { white-space: pre-wrap; word-break: break-word; margin: 0; background: #f7f8f8; padding: 12px; border-radius: 8px; }
+  </style>
+</head>
+<body class='bg-gray-faint'>
+
+  <header class='sticky top z2 bg-white' style='position:relative;box-shadow:0 1px 0 rgba(14,16,18,.06),0 2px 16px rgba(14,16,18,.04);'>
+    <div class='wmax1200 mx-auto px24 flex flex--center-cross flex--space-between-main' style='height:64px;'>
+      <div class='flex flex--center-cross'>
+        <a href='https://www.mapbox.com/' class='flex flex--center-cross color-gray-dark' style='text-decoration:none;' aria-label='Mapbox home'>
+          <svg class='mb-logo' viewBox="0 0 126 28" role="img" aria-label="Mapbox" preserveAspectRatio="xMidYMid meet" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <title>Mapbox</title>
+            <path d="M94.0376 7.66947C92.4586 7.66947 90.9434 8.31514 89.8429 9.44899V3.449C89.8429 3.26002 89.6834 3.10254 89.492 3.10254H87.3548C87.1634 3.10254 87.0039 3.26002 87.0039 3.449V19.6695C87.0039 19.8584 87.1634 20.0159 87.3548 20.0159H89.492C89.6834 20.0159 89.8429 19.8584 89.8429 19.6695V18.5514C90.9434 19.6852 92.4427 20.3309 94.0376 20.3309C97.371 20.3309 100.066 17.4962 100.066 14.0002C100.066 10.5041 97.371 7.66947 94.0376 7.66947ZM93.5432 17.7955C91.5176 17.7955 89.8748 16.1262 89.8589 14.0474V13.9529C89.8908 11.8742 91.5176 10.2049 93.5432 10.2049C95.5847 10.2049 97.2275 11.9057 97.2275 14.0002C97.2275 16.0947 95.5687 17.7955 93.5432 17.7955Z" fill="currentColor"></path>
+            <path d="M107.93 7.66919C104.325 7.66919 101.406 10.5038 101.406 13.9999C101.406 17.496 104.325 20.3306 107.93 20.3306C111.534 20.3306 114.453 17.496 114.453 13.9999C114.453 10.5038 111.534 7.66919 107.93 7.66919ZM107.914 17.7952C105.872 17.7952 104.229 16.0944 104.229 13.9999C104.229 11.9054 105.888 10.2046 107.914 10.2046C109.939 10.2046 111.598 11.9054 111.598 13.9999C111.598 16.0944 109.939 17.7952 107.914 17.7952Z" fill="currentColor"></path>
+            <path d="M68.0398 7.98415H65.9026C65.7112 7.98415 65.5517 8.14163 65.5517 8.33061V9.44872C64.4512 8.31486 62.9519 7.66919 61.357 7.66919C58.0236 7.66919 55.3281 10.5038 55.3281 13.9999C55.3281 17.496 58.0236 20.3306 61.357 20.3306C62.936 20.3306 64.4512 19.6849 65.5517 18.5511V19.6692C65.5517 19.8582 65.7112 20.0156 65.9026 20.0156H68.0398C68.2312 20.0156 68.3907 19.8582 68.3907 19.6692V8.33061C68.3907 8.14163 68.2312 7.98415 68.0398 7.98415ZM61.8514 17.7952C59.8099 17.7952 58.1671 16.0944 58.1671 13.9999C58.1671 11.9054 59.8259 10.2046 61.8514 10.2046C63.877 10.2046 65.5198 11.8739 65.5357 13.9527V14.0471C65.5198 16.1259 63.877 17.7952 61.8514 17.7952Z" fill="currentColor"></path>
+            <path d="M78.7104 7.66919C77.1315 7.66919 75.6163 8.31486 74.5158 9.44872V8.33061C74.5158 8.14163 74.3563 7.98415 74.1649 7.98415H72.0276C71.8363 7.98415 71.6768 8.14163 71.6768 8.33061V24.5511C71.6768 24.7401 71.8363 24.8975 72.0276 24.8975H74.1649C74.3563 24.8975 74.5158 24.7401 74.5158 24.5511V18.5511C75.6163 19.6849 77.1155 20.3306 78.7104 20.3306C82.0439 20.3306 84.7393 17.496 84.7393 13.9999C84.7393 10.5038 82.0439 7.66919 78.7104 7.66919ZM78.216 17.7952C76.1904 17.7952 74.5477 16.1259 74.5317 14.0471V13.9527C74.5636 11.8739 76.1904 10.2046 78.216 10.2046C80.2575 10.2046 81.9003 11.9054 81.9003 13.9999C81.9003 16.0944 80.2575 17.7952 78.216 17.7952Z" fill="currentColor"></path>
+            <path d="M48.9329 7.66915C47.338 7.68489 45.8866 8.59828 45.2008 10.0314C44.4193 8.56678 42.8562 7.6534 41.1815 7.66915C39.8737 7.66915 38.6456 8.29907 37.88 9.33844V8.33056C37.88 8.14159 37.7205 7.98411 37.5291 7.98411H35.3919C35.2005 7.98411 35.041 8.14159 35.041 8.33056V19.6691C35.041 19.8581 35.2005 20.0156 35.3919 20.0156H37.5291C37.7205 20.0156 37.88 19.8581 37.88 19.6691V12.8817C37.9598 11.3699 39.0284 10.1573 40.3362 10.1573C41.6919 10.1573 42.8243 11.2754 42.8243 12.74V19.6691C42.8243 19.8581 42.9838 20.0156 43.1752 20.0156H45.3284C45.5198 20.0156 45.6793 19.8581 45.6793 19.6691L45.6633 12.614C45.8547 11.2282 46.8595 10.1573 48.0876 10.1573C49.4433 10.1573 50.5757 11.2754 50.5757 12.74V19.6691C50.5757 19.8581 50.7352 20.0156 50.9266 20.0156H53.0798C53.2712 20.0156 53.4307 19.8581 53.4307 19.6691L53.4147 11.8739C53.4147 9.54316 51.4051 7.66915 48.9329 7.66915Z" fill="currentColor"></path>
+            <path d="M125.953 19.5276L122.252 13.9685L125.921 8.45669C126.016 8.31496 125.969 8.11024 125.825 8.01575C125.777 7.98425 125.713 7.96851 125.65 7.96851H123.177C122.986 7.96851 122.811 8.06299 122.715 8.22047L120.562 11.7953L118.409 8.23622C118.313 8.07874 118.137 7.98425 117.946 7.98425H115.474C115.298 7.98425 115.155 8.12599 115.155 8.29921C115.155 8.36221 115.171 8.4252 115.203 8.47244L118.871 13.9843L115.171 19.5433C115.075 19.685 115.123 19.8898 115.267 19.9843C115.314 20.0158 115.378 20.0315 115.442 20.0315H117.914C118.106 20.0315 118.281 19.937 118.377 19.7795L120.578 16.1575L122.779 19.7795C122.874 19.937 123.05 20.0315 123.241 20.0315H125.682C125.857 20.0315 126.001 19.8898 126.001 19.7165C126.001 19.6535 125.985 19.5906 125.953 19.5276Z" fill="currentColor"></path>
+            <path d="M14.179 0C6.34786 0 0 6.26772 0 14C0 21.7323 6.34786 28 14.179 28C22.0102 28 28.358 21.7323 28.358 14C28.358 6.26772 22.0102 0 14.179 0ZM20.9097 17.4331C16.061 22.2205 7.40052 20.6929 7.40052 20.6929C7.40052 20.6929 5.83748 12.1575 10.702 7.35433C13.3975 4.69291 17.8633 4.80315 20.6864 7.5748C23.5094 10.3465 23.6051 14.7717 20.9097 17.4331Z" fill="currentColor"></path>
+            <path d="M15.806 8.20459L14.4184 11.0235L11.5635 12.3936L14.4184 13.7636L15.806 16.5825L17.1936 13.7636L20.0486 12.3936L17.1936 11.0235L15.806 8.20459Z" fill="currentColor"></path>
+          </svg>
+        </a>
+        <nav class='nav-links ml30' id='nav'>
+          <span class='color-gray-dark px12 txt-ms txt-bold'>Trace Board</span>
+          <a href='https://github.com/DmtrMelnik/Trace-Board' class='link color-gray-dark px12 txt-ms'>Registry repo</a>
+          <a href='https://hey.mapbox.com/nav-native-viz/' class='link color-gray-dark px12 txt-ms'>nav-native-viz</a>
+        </nav>
+      </div>
+      <button class='nav-toggle' aria-label='Menu' onclick="document.getElementById('nav').classList.toggle('is-open')">
+        <svg class='icon' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><line x1='3' y1='6' x2='21' y2='6'/><line x1='3' y1='12' x2='21' y2='12'/><line x1='3' y1='18' x2='21' y2='18'/></svg>
+      </button>
+    </div>
+    <input id='file-input' type='file' accept='.json,.geojson,.csv,.js' multiple style='display:none'>
+  </header>
+
+  <main>
+    <section class='py30 bg-white' style='box-shadow:0 1px 0 rgba(14,16,18,.06);'>
+      <div class='px24 flex flex--column flex--row-mm flex--center-cross-mm flex--space-between-main-mm'>
+        <div>
+          <h1 class='display-3 txt-bold color-gray-dark'>Trace Board</h1>
+          <div class='txt-ms color-gray' id='data-status'>Loading snapshot…</div>
+        </div>
+        <div class='flex flex--center-cross mt12 mt0-mm'>
+          <div class='txt-s color-gray mr18' id='overlay-status'></div>
+          <button class='btn btn--stroke btn--s btn-pill px18 mr12' id='btn-load'>Load file</button>
+          <button class='btn btn--s btn-pill px18' id='btn-export'>Export triage</button>
+        </div>
+      </div>
+    </section>
+
+    <section class='py24'>
+      <div class='px24 grid grid--gut24' id='kpi-row'></div>
+    </section>
+
+    <section class='pb12'>
+      <div class='px24'>
+        <div class='txt-s txt-bold txt-uppercase color-gray txt-spacing1 mb12'>By Q-code</div>
+        <div class='flex flex--wrap' id='q-chips'></div>
+      </div>
+    </section>
+
+    <section class='pb18'>
+      <div class='px24'>
+        <div class='txt-s txt-bold txt-uppercase color-gray txt-spacing1 mb12'>Category</div>
+        <div class='flex flex--wrap tab-row' id='category-tabs'></div>
+      </div>
+    </section>
+
+    <section class='pb24'>
+      <div class='px24'>
+        <div class='card py24 px24'>
+          <div class='grid grid--gut12'>
+            <div class='col w-full mb12'>
+              <label class='txt-s txt-bold mb6 block' for='trace-finder'>Trace finder</label>
+              <div class='flex'>
+                <input id='trace-finder' class='input flex-child-grow' type='search' placeholder='name ending in .pbf.gz' autocomplete='off'>
+                <button type='button' class='btn btn--s btn-pill px18 ml6' id='trace-finder-go'>Find</button>
+              </div>
+              <div class='txt-xs color-gray mt6' id='trace-finder-status'></div>
+            </div>
+            <div class='col w-full w-1/3-ml mb12'>
+              <label class='txt-s txt-bold mb6 block' for='search'>Search</label>
+              <input id='search' class='input' type='search' placeholder='summary or problem_id'>
+            </div>
+            <div class='col w-1/2 w-1/6-ml mb12'>
+              <label class='txt-s txt-bold mb6 block' for='filter-type'>problem_type</label>
+              <div class='select-container'>
+                <select id='filter-type' class='select'><option value=''>All types</option></select>
+              </div>
+            </div>
+            <div class='col w-1/2 w-1/6-ml mb12'>
+              <label class='txt-s txt-bold mb6 block' for='filter-severity'>Severity</label>
+              <div class='select-container'>
+                <select id='filter-severity' class='select'>
+                  <option value=''>All</option>
+                  <option value='high'>high</option>
+                  <option value='medium'>medium</option>
+                  <option value='low'>low</option>
+                </select>
+              </div>
+            </div>
+            <div class='col w-1/2 w-1/6-ml mb12'>
+              <label class='txt-s txt-bold mb6 block' for='filter-sort'>Sort</label>
+              <div class='select-container'>
+                <select id='filter-sort' class='select'>
+                  <option value='severity' selected>Severity</option>
+                  <option value='time'>Time</option>
+                  <option value='q'>Q-code</option>
+                  <option value='div_desc'>Divergence + lasting (high→low)</option>
+                  <option value='div_asc'>Divergence + lasting (low→high)</option>
+                  <option value='poor_desc'>Driver stopped (high→low)</option>
+                  <option value='poor_asc'>Driver stopped (low→high)</option>
+                  <option value='eta_desc'>ETA impact (high→low)</option>
+                  <option value='eta_asc'>ETA impact (low→high)</option>
+                  <option value='soc_desc'>SOC prediction error (high→low)</option>
+                  <option value='soc_asc'>SOC prediction error (low→high)</option>
+                  <option value='incident_desc'>Incident length (high→low)</option>
+                  <option value='incident_asc'>Incident length (low→high)</option>
+                  <option value='overpred_desc'>Over-pred speed gap (high→low)</option>
+                  <option value='overpred_asc'>Over-pred speed gap (low→high)</option>
+                </select>
+              </div>
+            </div>
+            <div class='col w-1/2 w-1/6-ml mb12'>
+              <label class='txt-s txt-bold mb6 block' for='filter-label'>Triage label</label>
+              <div class='select-container'>
+                <select id='filter-label' class='select'>
+                  <option value=''>All</option>
+                  <option value='unlabeled'>Unlabeled</option>
+                  <option value='true_map_issue'>true_map_issue</option>
+                  <option value='nav_sdk'>nav_sdk</option>
+                  <option value='driver_behavior'>driver_behavior</option>
+                  <option value='noise'>noise</option>
+                  <option value='expected_incident'>expected_incident</option>
+                </select>
+              </div>
+            </div>
+            <div class='col w-1/2 w-1/6-ml mb12'>
+              <label class='txt-s txt-bold mb6 block' for='filter-viewed'>Viewed</label>
+              <div class='select-container'>
+                <select id='filter-viewed' class='select'>
+                  <option value=''>All</option>
+                  <option value='unseen'>Unseen</option>
+                  <option value='viewed'>Viewed</option>
+                </select>
+              </div>
+            </div>
+            <div class='col w-1/2 w-1/6-ml mb12'>
+              <label class='txt-s txt-bold mb6 block' for='filter-project'>Project</label>
+              <div class='select-container'>
+                <select id='filter-project' class='select'><option value=''>All</option></select>
+              </div>
+            </div>
+            <div class='col w-1/2 w-1/6-ml mb12'>
+              <label class='txt-s txt-bold mb6 block' for='filter-platform'>Platform</label>
+              <div class='select-container'>
+                <select id='filter-platform' class='select'><option value=''>All</option></select>
+              </div>
+            </div>
+            <div class='col w-1/2 w-1/6-ml mb12'>
+              <label class='txt-s txt-bold mb6 block' for='filter-vehicle'>VIN</label>
+              <input id='filter-vehicle' class='input' type='search' placeholder='vehicle'>
+            </div>
+            <div class='col w-1/2 w-1/6-ml mb12'>
+              <label class='txt-s txt-bold mb6 block' for='filter-user'>User ID</label>
+              <input id='filter-user' class='input' type='search' placeholder='user_id'>
+            </div>
+            <div class='col w-1/2 w-1/6-ml mb12'>
+              <label class='txt-s txt-bold mb6 block' for='filter-from'>From (UTC)</label>
+              <input id='filter-from' class='input' type='date'>
+            </div>
+            <div class='col w-1/2 w-1/6-ml mb12'>
+              <label class='txt-s txt-bold mb6 block' for='filter-to'>To (UTC)</label>
+              <input id='filter-to' class='input' type='date'>
+            </div>
+            <div class='col w-full w-1/6-ml mb12 flex flex--center-cross'>
+              <label class='checkbox-container txt-s'>
+                <input id='filter-geo' type='checkbox'>
+                <div class='checkbox mr6'></div>
+                Coordinates only
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class='pb36'>
+      <div class='px24 grid grid--gut24'>
+        <div class='col w-full w-1/2-ml mb24'>
+          <div class='card px18 py12 mb12' id='trace-name-bar' hidden></div>
+          <div id='map' class='bg-white'></div>
+          <div class='txt-s color-gray mt12 mb18' id='map-legend'></div>
+          <div class='card px18 py18' id='detail-card'>
+            <div class='txt-s color-gray'>Select a finding on the map or in the list.</div>
+          </div>
+        </div>
+        <div class='col w-full w-1/2-ml mb24'>
+          <div class='card px18 py18'>
+            <div class='flex flex--space-between-main flex--center-cross mb12'>
+              <div class='txt-s txt-bold txt-uppercase color-gray txt-spacing1'>Matching findings</div>
+              <div class='flex flex--center-cross'>
+                <label class='txt-s color-gray mr6' for='list-sort'>Sort</label>
+                <div class='select-container mr12' style='min-width:240px'>
+                  <select id='list-sort' class='select'>
+                    <option value='severity'>Severity</option>
+                    <option value='time'>Time</option>
+                    <option value='q'>Q-code</option>
+                    <option value='div_desc'>Divergence + lasting (high→low)</option>
+                    <option value='div_asc'>Divergence + lasting (low→high)</option>
+                    <option value='poor_desc'>Driver stopped (high→low)</option>
+                    <option value='poor_asc'>Driver stopped (low→high)</option>
+                    <option value='eta_desc'>ETA impact (high→low)</option>
+                    <option value='eta_asc'>ETA impact (low→high)</option>
+                    <option value='soc_desc'>SOC prediction error (high→low)</option>
+                    <option value='soc_asc'>SOC prediction error (low→high)</option>
+                    <option value='incident_desc'>Incident length (high→low)</option>
+                    <option value='incident_asc'>Incident length (low→high)</option>
+                    <option value='overpred_desc'>Over-pred speed gap (high→low)</option>
+                    <option value='overpred_asc'>Over-pred speed gap (low→high)</option>
+                  </select>
+                </div>
+                <div class='txt-s color-gray' id='list-count'></div>
+              </div>
+            </div>
+            <div class='result-list' id='result-list'></div>
+          </div>
+        </div>
+      </div>
+      <div class='px24' id='trace-panel' hidden></div>
+    </section>
+  </main>
+
+  <footer class='bg-gray-dark py24 prose--dark'>
+    <div class='px24 flex flex--space-between-main flex--center-cross'>
+      <a href='https://www.mapbox.com/' class='flex flex--center-cross color-white' style='text-decoration:none;' aria-label='Mapbox home'>
+        <svg class='mb-logo' viewBox="0 0 126 28" role="img" aria-label="Mapbox" preserveAspectRatio="xMidYMid meet" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <title>Mapbox</title>
+          <path d="M94.0376 7.66947C92.4586 7.66947 90.9434 8.31514 89.8429 9.44899V3.449C89.8429 3.26002 89.6834 3.10254 89.492 3.10254H87.3548C87.1634 3.10254 87.0039 3.26002 87.0039 3.449V19.6695C87.0039 19.8584 87.1634 20.0159 87.3548 20.0159H89.492C89.6834 20.0159 89.8429 19.8584 89.8429 19.6695V18.5514C90.9434 19.6852 92.4427 20.3309 94.0376 20.3309C97.371 20.3309 100.066 17.4962 100.066 14.0002C100.066 10.5041 97.371 7.66947 94.0376 7.66947ZM93.5432 17.7955C91.5176 17.7955 89.8748 16.1262 89.8589 14.0474V13.9529C89.8908 11.8742 91.5176 10.2049 93.5432 10.2049C95.5847 10.2049 97.2275 11.9057 97.2275 14.0002C97.2275 16.0947 95.5687 17.7955 93.5432 17.7955Z" fill="currentColor"></path>
+          <path d="M107.93 7.66919C104.325 7.66919 101.406 10.5038 101.406 13.9999C101.406 17.496 104.325 20.3306 107.93 20.3306C111.534 20.3306 114.453 17.496 114.453 13.9999C114.453 10.5038 111.534 7.66919 107.93 7.66919ZM107.914 17.7952C105.872 17.7952 104.229 16.0944 104.229 13.9999C104.229 11.9054 105.888 10.2046 107.914 10.2046C109.939 10.2046 111.598 11.9054 111.598 13.9999C111.598 16.0944 109.939 17.7952 107.914 17.7952Z" fill="currentColor"></path>
+          <path d="M68.0398 7.98415H65.9026C65.7112 7.98415 65.5517 8.14163 65.5517 8.33061V9.44872C64.4512 8.31486 62.9519 7.66919 61.357 7.66919C58.0236 7.66919 55.3281 10.5038 55.3281 13.9999C55.3281 17.496 58.0236 20.3306 61.357 20.3306C62.936 20.3306 64.4512 19.6849 65.5517 18.5511V19.6692C65.5517 19.8582 65.7112 20.0156 65.9026 20.0156H68.0398C68.2312 20.0156 68.3907 19.8582 68.3907 19.6692V8.33061C68.3907 8.14163 68.2312 7.98415 68.0398 7.98415ZM61.8514 17.7952C59.8099 17.7952 58.1671 16.0944 58.1671 13.9999C58.1671 11.9054 59.8259 10.2046 61.8514 10.2046C63.877 10.2046 65.5198 11.8739 65.5357 13.9527V14.0471C65.5198 16.1259 63.877 17.7952 61.8514 17.7952Z" fill="currentColor"></path>
+          <path d="M78.7104 7.66919C77.1315 7.66919 75.6163 8.31486 74.5158 9.44872V8.33061C74.5158 8.14163 74.3563 7.98415 74.1649 7.98415H72.0276C71.8363 7.98415 71.6768 8.14163 71.6768 8.33061V24.5511C71.6768 24.7401 71.8363 24.8975 72.0276 24.8975H74.1649C74.3563 24.8975 74.5158 24.7401 74.5158 24.5511V18.5511C75.6163 19.6849 77.1155 20.3306 78.7104 20.3306C82.0439 20.3306 84.7393 17.496 84.7393 13.9999C84.7393 10.5038 82.0439 7.66919 78.7104 7.66919ZM78.216 17.7952C76.1904 17.7952 74.5477 16.1259 74.5317 14.0471V13.9527C74.5636 11.8739 76.1904 10.2046 78.216 10.2046C80.2575 10.2046 81.9003 11.9054 81.9003 13.9999C81.9003 16.0944 80.2575 17.7952 78.216 17.7952Z" fill="currentColor"></path>
+          <path d="M48.9329 7.66915C47.338 7.68489 45.8866 8.59828 45.2008 10.0314C44.4193 8.56678 42.8562 7.6534 41.1815 7.66915C39.8737 7.66915 38.6456 8.29907 37.88 9.33844V8.33056C37.88 8.14159 37.7205 7.98411 37.5291 7.98411H35.3919C35.2005 7.98411 35.041 8.14159 35.041 8.33056V19.6691C35.041 19.8581 35.2005 20.0156 35.3919 20.0156H37.5291C37.7205 20.0156 37.88 19.8581 37.88 19.6691V12.8817C37.9598 11.3699 39.0284 10.1573 40.3362 10.1573C41.6919 10.1573 42.8243 11.2754 42.8243 12.74V19.6691C42.8243 19.8581 42.9838 20.0156 43.1752 20.0156H45.3284C45.5198 20.0156 45.6793 19.8581 45.6793 19.6691L45.6633 12.614C45.8547 11.2282 46.8595 10.1573 48.0876 10.1573C49.4433 10.1573 50.5757 11.2754 50.5757 12.74V19.6691C50.5757 19.8581 50.7352 20.0156 50.9266 20.0156H53.0798C53.2712 20.0156 53.4307 19.8581 53.4307 19.6691L53.4147 11.8739C53.4147 9.54316 51.4051 7.66915 48.9329 7.66915Z" fill="currentColor"></path>
+          <path d="M125.953 19.5276L122.252 13.9685L125.921 8.45669C126.016 8.31496 125.969 8.11024 125.825 8.01575C125.777 7.98425 125.713 7.96851 125.65 7.96851H123.177C122.986 7.96851 122.811 8.06299 122.715 8.22047L120.562 11.7953L118.409 8.23622C118.313 8.07874 118.137 7.98425 117.946 7.98425H115.474C115.298 7.98425 115.155 8.12599 115.155 8.29921C115.155 8.36221 115.171 8.4252 115.203 8.47244L118.871 13.9843L115.171 19.5433C115.075 19.685 115.123 19.8898 115.267 19.9843C115.314 20.0158 115.378 20.0315 115.442 20.0315H117.914C118.106 20.0315 118.281 19.937 118.377 19.7795L120.578 16.1575L122.779 19.7795C122.874 19.937 123.05 20.0315 123.241 20.0315H125.682C125.857 20.0315 126.001 19.8898 126.001 19.7165C126.001 19.6535 125.985 19.5906 125.953 19.5276Z" fill="currentColor"></path>
+          <path d="M14.179 0C6.34786 0 0 6.26772 0 14C0 21.7323 6.34786 28 14.179 28C22.0102 28 28.358 21.7323 28.358 14C28.358 6.26772 22.0102 0 14.179 0ZM20.9097 17.4331C16.061 22.2205 7.40052 20.6929 7.40052 20.6929C7.40052 20.6929 5.83748 12.1575 10.702 7.35433C13.3975 4.69291 17.8633 4.80315 20.6864 7.5748C23.5094 10.3465 23.6051 14.7717 20.9097 17.4331Z" fill="currentColor"></path>
+          <path d="M15.806 8.20459L14.4184 11.0235L11.5635 12.3936L14.4184 13.7636L15.806 16.5825L17.1936 13.7636L20.0486 12.3936L17.1936 11.0235L15.806 8.20459Z" fill="currentColor"></path>
+        </svg>
+      </a>
+      <div class='txt-s color-gray'>Internal explorer · OSM basemap (no Mapbox token) · triage stays in this browser</div>
+    </div>
+  </footer>
+
+  <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
+  <script src='https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js'></script>
+  <script src='data/problems.js'></script>
+  <script src='app.js'></script>
+</body>
+</html>

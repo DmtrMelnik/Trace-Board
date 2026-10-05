@@ -29,7 +29,7 @@ not depend on the separate `search-destination-kit` copy.
 ### 2. Build the problem registry from `*-analysis.md`
 
 ```bash
-cd /Users/dzmitrymelnik/docs/My-first-RP/trace-problem-registry
+cd /Users/dzmitrymelnik/docs/Trace-Board/trace-problem-registry
 
 python3 build_problem_registry.py \
   --input-dir /Users/dzmitrymelnik/docs/driverops-driving-tracking-fresh/scripts/trace-analysis/input-traces/real \
