@@ -1,17 +1,25 @@
 # Trace Board
 
-## Local trace problem registry
+Open the page in a browser. Nothing to install:
 
-[`trace-problem-registry/`](trace-problem-registry/) collects findings from
-Mapbox Co-pilot `*-analysis.md` reports into one local Markdown report plus
-CSV, JSON, and GeoJSON outputs.
+**https://dmtrmelnik.github.io/Trace-Board/problem-explorer/**
 
-The tool is standalone, uses only Python's standard library, and does not
-upload traces or findings.
+The page lists findings from Co-pilot trip logs on a map. Pick a row, the map moves to that place. Checkboxes and notes stay in your browser only. They are not saved on GitHub.
 
-## Problem explorer (browser)
+## Run the same page on your computer
 
-[`problem-explorer/`](problem-explorer/) is a Mapbox Assembly dashboard for
-`problems.csv` / JSON: clustered map, category tabs, filters, and local triage.
-No build step — serve the folder (`python3 -m http.server`) and open it, or
-share via GitHub Pages. See [`problem-explorer/README.md`](problem-explorer/README.md).
+```bash
+git clone https://github.com/DmtrMelnik/Trace-Board.git
+cd Trace-Board/problem-explorer
+python3 -m http.server 8765
+```
+
+Then open http://127.0.0.1:8765/
+
+Python 3 is enough. After the page is already open, a hard refresh is `Cmd+Shift+R`.
+
+## What else is in this repo
+
+[`problem-explorer/`](problem-explorer/) is the page above. How to refresh its data after new trip logs is in [`problem-explorer/README.md`](problem-explorer/README.md).
+
+[`trace-problem-registry/`](trace-problem-registry/) turns `*-analysis.md` reports into the list the page shows. It does not upload traces.

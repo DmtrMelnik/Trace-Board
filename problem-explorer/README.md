@@ -8,7 +8,11 @@ Click a card to zoom the map when the row has coordinates.
 
 ## Open it
 
-The bundled snapshot is `data/problems.js`. Browsers block `fetch` of local files, so serve the folder:
+Anyone can open the page already hosted on GitHub:
+
+**https://dmtrmelnik.github.io/Trace-Board/problem-explorer/**
+
+To run the same files on your computer, serve this folder. Browsers block `fetch` of local files, and the snapshot is `data/problems.js`:
 
 ```bash
 cd /Users/dzmitrymelnik/docs/Trace-Board/problem-explorer
