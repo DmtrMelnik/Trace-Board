@@ -481,6 +481,8 @@ def load_divergence_lines(report_path: Path) -> List[Dict[str, Any]]:
                 "Missed road osm",
                 "Detour drive",
                 "Detour route",
+                "Off-route drive",
+                "Off-route route",
             ):
                 continue
             coords = [
@@ -515,12 +517,14 @@ def attach_divergence_lines(
             kind = "detour"
         elif line["label"].startswith("Missed"):
             kind = "missed"
+        elif line["label"].startswith("Off-route"):
+            kind = "offroute"
         slot = grouped.setdefault(f"{match.group(1)}|{kind}", {})
-        if line["label"] in ("GPS divergence drive", "Missed road drive", "Detour drive"):
+        if line["label"] in ("GPS divergence drive", "Missed road drive", "Detour drive", "Off-route drive"):
             slot["gps_line"] = line["coordinates"]
         elif line["label"] == "GPS divergence matched":
             slot["matched_line"] = line["coordinates"]
-        elif line["label"] == "Detour route":
+        elif line["label"] in ("Detour route", "Off-route route"):
             slot["route_line"] = line["coordinates"]
         else:
             slot["road_line"] = line["coordinates"]
@@ -534,6 +538,8 @@ def attach_divergence_lines(
             slot = grouped.get(f"{ts}|missed")
         elif finding.get("problem_type") == "gps_divergence":
             slot = grouped.get(f"{ts}|div")
+        elif finding.get("problem_type") == "off_route":
+            slot = grouped.get(f"{ts}|offroute")
         else:
             continue
         if not slot:

@@ -12,7 +12,7 @@ Anyone with the link sees the same list. That list is a published snapshot. It c
 
 1. Click a row in **Matching findings**. The map moves to that place, and the details open beside it.
 2. **DD** opens the same place in Directions Debug.
-3. The checkbox marks the place as reviewed. The mark stays in this browser only. A colleague does not see your checkboxes, and you do not see theirs.
+3. Each finding gets one tag: **True Detection**, **False positive detection**, or **N/A**. Enter your name first. **Undo** clears the tag so it can be changed. Until then, another tag cannot be set. Counts for the current filter sit under the list.
 4. Filters above the list narrow it by type, severity, and text.
 5. **Trace finder** takes a `.pbf.gz` file name. **Find** shows that trip above the map. **open trace** limits the list to findings from that file.
 6. For **gps_divergence**, the red line is the drive and the blue line is where the map matcher placed the car. The lines appear when that row is selected.
@@ -27,13 +27,17 @@ A viewer does not need the trip logs, a local checkout, or Python. The findings,
 
 Use this only if you want the files locally. The public link above is the shared page.
 
+Shared tags need this server. The public GitHub link shows the list, but it cannot store tags.
+
 ```bash
 git clone https://github.com/DmtrMelnik/Trace-Board.git
 cd Trace-Board/problem-explorer
-python3 -m http.server 8765
+python3 serve_board.py
 ```
 
 Then open http://127.0.0.1:8765/
+
+Everyone who reviews together opens that same address (on one network, the computer’s IP instead of 127.0.0.1). Tags are written to `data/reviews.json` on the machine that runs the server.
 
 Leave the terminal open. `Ctrl+C` stops the page. Python 3 is enough.
 
