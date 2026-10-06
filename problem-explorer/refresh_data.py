@@ -21,6 +21,12 @@ def main() -> None:
     if not args.json.is_file():
         raise SystemExit(f"missing {args.json} — run the registry first")
     data = json.loads(args.json.read_text(encoding="utf-8"))
+    extra = args.json.with_name("hd_coverage.json")
+    if extra.is_file():
+        added = json.loads(extra.read_text(encoding="utf-8"))
+        data = [row for row in data if row.get("problem_type") not in ("hd_coverage_ended", "hd_coverage_end_elevated")]
+        data.extend(added)
+        print(f"merged {len(added)} HD coverage findings")
     args.out_dir.mkdir(parents=True, exist_ok=True)
     js = args.out_dir / "problems.js"
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))

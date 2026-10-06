@@ -16,12 +16,14 @@ To run the same files on your computer, serve this folder. Browsers block `fetch
 
 ```bash
 cd /Users/dzmitrymelnik/docs/Trace-Board/problem-explorer
-python3 -m http.server 8765
+python3 serve_board.py
 ```
 
 Then open http://127.0.0.1:8765/
 
-Hard-refresh the tab (`Cmd+Shift+R`) after replacing `data/problems.js`. Triage labels stay in **this browser** (`localStorage`), not in the files.
+`serve_board.py` is the review server. Reviewers who work together open that same address. The first tag on a finding is stored in `data/reviews.json` and shown to everyone else. A second tag is rejected. The public GitHub page does not store tags.
+
+Hard-refresh the tab (`Cmd+Shift+R`) after replacing `data/problems.js`.
 
 ## Refresh after new Co-pilot traces (do this yourself)
 
@@ -49,7 +51,7 @@ python3 build_problem_registry.py \
 cd /Users/dzmitrymelnik/docs/Trace-Board/problem-explorer
 python3 refresh_data.py
 # if the server is not running:
-python3 -m http.server 8765
+python3 serve_board.py
 ```
 
 Then hard-refresh http://127.0.0.1:8765/
@@ -85,11 +87,11 @@ python3 refresh_data.py
 
 ## How to use
 
-1. KPI row: loaded count, with coordinates, high severity, unlabeled.
+1. KPI row: loaded count, with coordinates, high severity, tagged in this filter.
 2. **By Q-code** chips and **Category** tabs (route_changes, gps_divergence, …).
-3. Filters: search (`summary` / `problem_id`), `problem_type`, severity, sort, triage label, viewed, project, platform, VIN, user, date, coordinates-only.
+3. Filters: search (`summary` / `problem_id`), `problem_type`, severity, sort, tag, project, platform, VIN, user, date, coordinates-only.
 4. Map: color = Q-code, size = severity, clusters on zoom out. Popup on pin click.
 5. Matching findings: short cards (not a full table). Click → zoom + detail. Click **Trace** on the detail card to open a panel under the map with every finding from that PBF (map and list also focus on that trace). **Show all traces** clears it.
-6. Triage on the detail card: viewed, label (`true_map_issue` / `nav_sdk` / `driver_behavior` / `noise` / `expected_incident`), notes. **Export triage** downloads CSV.
+6. Tag a finding **True Detection**, **False positive detection**, or **N/A**. **Undo** clears it so the decision can change. Counts sit under Matching findings. **Export tags** downloads CSV.
 
 `problem_id` is still a registry hash, not a field inside the PBF. Use time + lat/lon from the detail card in nav-native-viz.

@@ -18,9 +18,21 @@
     .pin-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
     .row-num { width: 36px; flex: 0 0 auto; font-variant-numeric: tabular-nums; color: #757d82; }
     .result-row.is-active { outline: 2px solid #0f71fa; outline-offset: -2px; }
-    .result-row.is-reviewed { opacity: 0.55; }
-    .review-check { flex: 0 0 auto; display: flex; align-items: center; margin-right: 10px; }
-    .review-check input { width: 16px; height: 16px; cursor: pointer; }
+    .result-row.is-tagged { box-shadow: inset 3px 0 0 #1b7f4e; }
+    .result-row.is-tagged.tag-false_positive { box-shadow: inset 3px 0 0 #dc2b28; }
+    .result-row.is-tagged.tag-na { box-shadow: inset 3px 0 0 #757d82; }
+    .tag-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+    .tag-btn { border: 1px solid #d4d8da; background: #fff; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; cursor: pointer; color: #0f71fa; }
+    .tag-btn:hover { background: #e7f0ff; }
+    .tag-undo { border: 0; background: transparent; padding: 2px 6px; font-size: 12px; font-weight: 700; cursor: pointer; color: #757d82; }
+    .tag-undo:hover { color: #dc2b28; }
+    .tag-pill { display: inline-block; margin-top: 8px; margin-right: 6px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+    .tag-true_detection { background: #e5f6ee; color: #1b7f4e; }
+    .tag-false_positive { background: #fde8e7; color: #dc2b28; }
+    .tag-na { background: #eef0f1; color: #4d5255; }
+    .review-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .review-stat { background: #f7f8f8; border-radius: 8px; padding: 10px 12px; }
+    .review-stat .num { font-size: 22px; font-weight: 700; color: #0f1720; }
     .dd-link { flex: 0 0 auto; margin-left: 8px; text-decoration: none; white-space: nowrap; }
     .trace-block-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: #fff; border: 0; border-left: 3px solid #4264fb; padding: 8px 10px; margin: 10px 0 6px; border-radius: 0 8px 8px 0; box-shadow: 0 1px 0 rgba(14,16,18,.06); cursor: pointer; }
     .trace-block-head.is-active { background: #e7f0ff; box-shadow: inset 0 0 0 2px #0f71fa; }
@@ -30,7 +42,9 @@
     .leaflet-popup-content { font-size: 13px; line-height: 1.4; margin: 10px 14px; }
     .legend-swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
     #open-trace { white-space: nowrap; }
-    .repeat-mark { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: #e7f0ff; color: #0f71fa; font-size: 11px; font-weight: 700; letter-spacing: 0; vertical-align: 1px; }
+    .repeat-mark { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: #e7f0ff; color: #0f71fa; font-size: 11px; font-weight: 700; letter-spacing: 0; vertical-align: 1px; border: 0; cursor: pointer; }
+    .also-files { margin-top: 8px; padding: 8px 10px; background: #fff; border-radius: 8px; }
+    .also-file { word-break: break-all; user-select: text; cursor: text; color: #0f71fa; margin-top: 4px; }
     .trace-filename { word-break: break-all; user-select: text; cursor: text; color: #0f71fa; }
     .trace-filename { word-break: break-all; }
     .trace-findings { max-height: min(56vh, 640px); overflow: auto; }
@@ -78,7 +92,7 @@
         <div class='flex flex--center-cross mt12 mt0-mm'>
           <div class='txt-s color-gray mr18' id='overlay-status'></div>
           <button class='btn btn--stroke btn--s btn-pill px18 mr12' id='btn-load'>Load file</button>
-          <button class='btn btn--s btn-pill px18' id='btn-export'>Export triage</button>
+          <button class='btn btn--s btn-pill px18' id='btn-export'>Export tags</button>
         </div>
       </div>
     </section>
@@ -157,26 +171,14 @@
               </div>
             </div>
             <div class='col w-1/2 w-1/6-ml mb12'>
-              <label class='txt-s txt-bold mb6 block' for='filter-label'>Triage label</label>
+              <label class='txt-s txt-bold mb6 block' for='filter-label'>Tag</label>
               <div class='select-container'>
                 <select id='filter-label' class='select'>
                   <option value=''>All</option>
-                  <option value='unlabeled'>Unlabeled</option>
-                  <option value='true_map_issue'>true_map_issue</option>
-                  <option value='nav_sdk'>nav_sdk</option>
-                  <option value='driver_behavior'>driver_behavior</option>
-                  <option value='noise'>noise</option>
-                  <option value='expected_incident'>expected_incident</option>
-                </select>
-              </div>
-            </div>
-            <div class='col w-1/2 w-1/6-ml mb12'>
-              <label class='txt-s txt-bold mb6 block' for='filter-viewed'>Viewed</label>
-              <div class='select-container'>
-                <select id='filter-viewed' class='select'>
-                  <option value=''>All</option>
-                  <option value='unseen'>Unseen</option>
-                  <option value='viewed'>Viewed</option>
+                  <option value='untagged'>Not tagged</option>
+                  <option value='true_detection'>True Detection</option>
+                  <option value='false_positive'>False positive detection</option>
+                  <option value='na'>N/A</option>
                 </select>
               </div>
             </div>
@@ -259,6 +261,16 @@
               </div>
             </div>
             <div class='result-list' id='result-list'></div>
+            <div class='mt18 pt18' style='border-top:1px solid #e6e8ea;'>
+              <div class='flex flex--space-between-main flex--center-cross mb12'>
+                <div class='txt-s txt-bold txt-uppercase color-gray txt-spacing1'>Review</div>
+                <label class='txt-s color-gray flex flex--center-cross'>Your name
+                  <input id='reviewer-name' class='input ml6' type='text' placeholder='name' autocomplete='name' style='width:160px;'>
+                </label>
+              </div>
+              <div id='review-stats'></div>
+              <div class='txt-s color-gray mt12' id='review-status'></div>
+            </div>
           </div>
         </div>
       </div>
@@ -281,7 +293,7 @@
           <path d="M15.806 8.20459L14.4184 11.0235L11.5635 12.3936L14.4184 13.7636L15.806 16.5825L17.1936 13.7636L20.0486 12.3936L17.1936 11.0235L15.806 8.20459Z" fill="currentColor"></path>
         </svg>
       </a>
-      <div class='txt-s color-gray'>Internal explorer · OSM basemap (no Mapbox token) · triage stays in this browser</div>
+      <div class='txt-s color-gray'>Internal explorer · OSM basemap (no Mapbox token) · tags are shared on the review server</div>
     </div>
   </footer>
 

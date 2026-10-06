@@ -14,11 +14,16 @@
     Q_oneway: '#9b2226',
     Q_map: '#7a3e00',
     Q_feedback: '#c43b8c',
-    H1: '#4264fb'
+    H1: '#4264fb',
+    H2: '#9b2226'
   };
   var SEV_RANK = { high: 0, medium: 1, low: 2, info: 3 };
-  var LABELS = ['true_map_issue', 'nav_sdk', 'driver_behavior', 'noise', 'expected_incident'];
-  var TRIAGE_KEY = 'trace-problem-triage-v1';
+  var TAGS = [
+    { id: 'true_detection', label: 'True Detection', short: 'True Detection' },
+    { id: 'false_positive', label: 'False positive detection', short: 'False positive' },
+    { id: 'na', label: 'N/A', short: 'N/A' }
+  ];
+  var REVIEWER_KEY = 'trace-board-reviewer';
   var LAST_POS_KEY = 'trace-problem-last-pos-v1';
   var LIST_CAP = 3000;
 
@@ -34,7 +39,11 @@
     cluster: null,
     shouldFit: true,
     expandedTraces: {},
-    litPlaces: {}
+    litPlaces: {},
+    showAlsoId: '',
+    reviews: {},
+    reviewLive: false,
+    reviewError: ''
   };
 
   var map, overlayLayer;
@@ -48,18 +57,29 @@
 
   function qColor(q) { return Q_COLORS[q] || '#4d5255'; }
 
-  function loadTriage() {
-    try { return JSON.parse(localStorage.getItem(TRIAGE_KEY) || '{}'); }
-    catch (e) { return {}; }
+  function reviewOf(id) {
+    return state.reviews[id] || null;
   }
 
-  function saveTriage(data) {
-    localStorage.setItem(TRIAGE_KEY, JSON.stringify(data));
+  function tagMeta(id) {
+    for (var i = 0; i < TAGS.length; i++) {
+      if (TAGS[i].id === id) return TAGS[i];
+    }
+    return null;
   }
 
-  function triageOf(id) {
-    var all = loadTriage();
-    return all[id] || { label: '', notes: '', viewed: false };
+  function tagLabel(id) {
+    var meta = tagMeta(id);
+    return meta ? meta.label : id;
+  }
+
+  function reviewerName() {
+    var el = $('reviewer-name');
+    var name = el ? String(el.value || '').trim() : '';
+    if (!name) {
+      try { name = String(localStorage.getItem(REVIEWER_KEY) || '').trim(); } catch (e) {}
+    }
+    return name;
   }
 
   function unique(list, key) {
@@ -207,7 +227,6 @@
       severity: $('filter-severity').value,
       sort: $('filter-sort').value,
       label: $('filter-label').value,
-      viewed: $('filter-viewed').value,
       project: $('filter-project').value,
       platform: $('filter-platform').value,
       vehicle: $('filter-vehicle').value.trim().toLowerCase(),
@@ -233,11 +252,9 @@
     if (f.user && String(p.user_id || '').toLowerCase().indexOf(f.user) === -1) return false;
     if (f.from && (p.timestamp_utc || '') < f.from) return false;
     if (f.to && (p.timestamp_utc || '') > (f.to + 'T23:59:59Z')) return false;
-    var t = triageOf(p.problem_id);
-    if (f.label === 'unlabeled' && t.label) return false;
-    if (f.label && f.label !== 'unlabeled' && t.label !== f.label) return false;
-    if (f.viewed === 'viewed' && !t.viewed) return false;
-    if (f.viewed === 'unseen' && t.viewed) return false;
+    var tag = (reviewOf(p.problem_id) || {}).tag || '';
+    if (f.label === 'untagged' && tag) return false;
+    if (f.label && f.label !== 'untagged' && tag !== f.label) return false;
     if (f.search) {
       var blob = ((p.summary || '') + ' ' + (p.problem_id || '') + ' ' + (p.problem_type || '')).toLowerCase();
       if (blob.indexOf(f.search) === -1) return false;
@@ -454,6 +471,9 @@
     var f = currentFilters();
     var rows = state.problems.filter(function (p) { return matches(p, f); });
     var mode = f.sort || 'severity';
+    if (!state.traceFile) {
+      rows = rows.filter(function (p) { return !p.repeat_drop; });
+    }
     rows.sort(function (a, b) {
       if (mode === 'time') return String(b.timestamp_utc || '').localeCompare(String(a.timestamp_utc || ''));
       if (mode === 'q') return String(a.q_code || '').localeCompare(String(b.q_code || ''));
@@ -477,8 +497,28 @@
     return 'also in ' + other + (other === 1 ? ' trace' : ' traces');
   }
 
+  function otherTraceFiles(p) {
+    var files = (p && p.repeat_files) || [];
+    var mine = traceKey(p);
+    return files.filter(function (file) { return file && file !== mine; });
+  }
+
+  function alsoFilesHtml(p) {
+    var files = otherTraceFiles(p);
+    if (!files.length || state.showAlsoId !== p.problem_id) return '';
+    return '<div class="also-files txt-xs">' +
+      files.map(function (file) {
+        return '<div class="also-file">' + escapeHtml(file) + '</div>';
+      }).join('') +
+      '</div>';
+  }
+
   function markRepeatPlaces(rows) {
-    rows.forEach(function (p) { delete p.seen_traces; });
+    rows.forEach(function (p) {
+      delete p.seen_traces;
+      delete p.repeat_files;
+      delete p.repeat_drop;
+    });
     var pool = rows.filter(function (p) {
       return !hideDividedOneway(p) && !hideUnlimitedSpeedLimit(p);
     });
@@ -544,8 +584,25 @@
       });
       var count = Object.keys(traces).length;
       if (count < 2) return;
-      members.forEach(function (i) { rows[i].seen_traces = count; });
+      var best = members[0];
+      members.forEach(function (i) {
+        if (repeatKeepScore(rows[i]) > repeatKeepScore(rows[best])) best = i;
+      });
+      var keeperTrace = traceKey(rows[best]);
+      var names = Object.keys(traces);
+      members.forEach(function (i) {
+        rows[i].seen_traces = count;
+        rows[i].repeat_files = names;
+        if (traceKey(rows[i]) !== keeperTrace) rows[i].repeat_drop = true;
+      });
     });
+  }
+
+  function repeatKeepScore(p) {
+    if (p.problem_type === 'gps_divergence') return metricDivergenceM(p) || 0;
+    var sev = p.severity === 'high' ? 3 : (p.severity === 'medium' ? 2 : 1);
+    var meters = parseMeters((p.metadata || {}).distance || (p.metadata || {}).length || (p.metadata || {})['worst dist'] || '');
+    return sev * 100000 + (meters || 0);
   }
 
   function distM(lat1, lon1, lat2, lon2) {
@@ -652,15 +709,20 @@
     var bySev = { high: 0, medium: 0, low: 0 };
     var byCat = {};
     var geo = 0;
-    var unlabeled = 0;
+    var tags = { true_detection: 0, false_positive: 0, na: 0 };
+    var tagged = 0;
     list.forEach(function (p) {
       byQ[p.q_code] = (byQ[p.q_code] || 0) + 1;
       bySev[p.severity] = (bySev[p.severity] || 0) + 1;
       byCat[p.category] = (byCat[p.category] || 0) + 1;
       if (hasGeo(p)) geo += 1;
-      if (!triageOf(p.problem_id).label) unlabeled += 1;
+      var rec = reviewOf(p.problem_id);
+      if (rec && tags[rec.tag] != null) {
+        tags[rec.tag] += 1;
+        tagged += 1;
+      }
     });
-    return { byQ: byQ, bySev: bySev, byCat: byCat, geo: geo, unlabeled: unlabeled, n: list.length };
+    return { byQ: byQ, bySev: bySev, byCat: byCat, geo: geo, tags: tags, tagged: tagged, n: list.length };
   }
 
   function kpiCard(label, value, hint) {
@@ -678,7 +740,7 @@
       kpiCard('Findings', cVis.n.toLocaleString(), 'of ' + cAll.n.toLocaleString() + ' loaded') +
       kpiCard('With coordinates', cVis.geo.toLocaleString(), cAll.geo.toLocaleString() + ' in snapshot') +
       kpiCard('High severity', (cVis.bySev.high || 0).toLocaleString(), 'medium ' + (cVis.bySev.medium || 0)) +
-      kpiCard('Unlabeled', cVis.unlabeled.toLocaleString(), 'triage in this browser');
+      kpiCard('Tagged', cVis.tagged.toLocaleString(), 'of ' + cVis.n.toLocaleString() + ' in this filter');
   }
 
   function renderQChips(all) {
@@ -776,8 +838,8 @@
     return 2 * r * Math.asin(Math.min(1, Math.sqrt(h)));
   }
 
-  // Short stretch around the pin: about 80 m each way, not the whole episode.
-  function clipAroundPin(line, lat, lon) {
+  // Short stretch around the pin. GPS divergence uses about 80 m each way.
+  function clipAroundPin(line, lat, lon, halfM) {
     var pts = latLngsFromLine(line);
     if (!pts || lat == null || lon == null) return null;
     var best = 0;
@@ -789,7 +851,7 @@
         best = i;
       }
     }
-    var halfM = 80;
+    if (halfM == null) halfM = 80;
     var from = best;
     var to = best;
     var accL = 0;
@@ -832,6 +894,22 @@
     });
   }
 
+  function offRouteRows(rows) {
+    var typeOn = $('filter-type') && $('filter-type').value === 'off_route';
+    if (typeOn) return rows.filter(function (p) { return p.problem_type === 'off_route'; });
+    var lit = state.litPlaces || {};
+    var keys = Object.keys(lit);
+    if (keys.length) {
+      return rows.filter(function (p) {
+        return p.problem_type === 'off_route' && lit[placeKeyById[p.problem_id]];
+      });
+    }
+    if (!state.selectedId) return [];
+    return rows.filter(function (p) {
+      return p.problem_id === state.selectedId && p.problem_type === 'off_route';
+    });
+  }
+
   function missedRoadRows(rows) {
     var typeOn = $('filter-type') && $('filter-type').value === 'missed_road';
     if (typeOn) return rows.filter(function (p) { return p.problem_type === 'missed_road'; });
@@ -854,6 +932,7 @@
       state.divLines = null;
     }
     state.divLegend = false;
+    state.offRouteLegend = false;
     state.missedLegend = false;
     state.detourLegend = false;
     state.detourBounds = null;
@@ -872,6 +951,23 @@
       if (drive) {
         L.polyline(drive, { color: '#dc2b28', weight: 5, opacity: 0.95 }).addTo(group);
         n += 1;
+      }
+    });
+    offRouteRows(rows).forEach(function (p) {
+      if (!p.metadata || !hasGeo(p)) return;
+      var lat = Number(p.lat);
+      var lon = Number(p.lon);
+      var route = clipAroundPin(p.metadata.route_line, lat, lon, 150);
+      var drive = clipAroundPin(p.metadata.gps_line, lat, lon, 150);
+      if (route) {
+        L.polyline(route, { color: '#0f71fa', weight: 5, opacity: 0.9 }).addTo(group);
+        n += 1;
+        state.offRouteLegend = true;
+      }
+      if (drive) {
+        L.polyline(drive, { color: '#dc2b28', weight: 5, opacity: 0.95 }).addTo(group);
+        n += 1;
+        state.offRouteLegend = true;
       }
     });
     missedRoadRows(rows).forEach(function (p) {
@@ -979,15 +1075,18 @@
     var missedNote = state.missedLegend
       ? '<span class="mr12"><span class="legend-swatch" style="background:#dc2b28"></span>drive</span><span class="mr12"><span class="legend-swatch" style="background:#7a8589"></span>nearest OSM road</span>'
       : '';
+    var offRouteNote = state.offRouteLegend
+      ? '<span class="mr12"><span class="legend-swatch" style="background:#0f71fa"></span>proposed route</span><span class="mr12"><span class="legend-swatch" style="background:#dc2b28"></span>actual drive</span>'
+      : '';
     var detourNote = state.detourLegend
       ? '<span class="mr12"><span class="legend-swatch" style="background:#0f71fa"></span>planned route</span><span class="mr12"><span class="legend-swatch" style="background:#dc2b28"></span>actual drive</span>'
       : '';
-    $('map-legend').innerHTML = (legend || 'No points in the current filter. Turn off “Coordinates only” or pick another tab.') + divNote + missedNote + detourNote;
+    $('map-legend').innerHTML = (legend || 'No points in the current filter. Turn off “Coordinates only” or pick another tab.') + divNote + offRouteNote + missedNote + detourNote;
   }
 
   function listFingerprint() {
     var f = currentFilters();
-    return [f.qCode, f.category, f.type, f.sort, f.search, f.severity, f.label, f.viewed, state.traceFile].join('|');
+    return [f.qCode, f.category, f.type, f.sort, f.search, f.severity, f.label, state.traceFile].join('|');
   }
 
   function saveLastPos(n, id, total) {
@@ -1024,6 +1123,21 @@
       encodeURIComponent(query) + debug;
   }
 
+  function tagControls(p) {
+    var rec = reviewOf(p.problem_id);
+    if (rec && rec.tag) {
+      return '<div class="tag-actions"><span class="tag-pill tag-' + escapeHtml(rec.tag) + '">' + escapeHtml(tagLabel(rec.tag)) + '</span>' +
+        '<span class="tag-by txt-xs color-gray">by ' + escapeHtml(rec.reviewer || 'reviewer') + '</span>' +
+        '<button type="button" class="tag-undo" data-id="' + escapeHtml(p.problem_id) + '">Undo</button></div>';
+    }
+    var html = '<div class="tag-actions">';
+    TAGS.forEach(function (t) {
+      html += '<button type="button" class="tag-btn" data-tag="' + t.id + '" data-id="' + escapeHtml(p.problem_id) + '">' +
+        escapeHtml(t.short) + '</button>';
+    });
+    return html + '</div>';
+  }
+
   function renderList(rows) {
     var cap = LIST_CAP;
     if (state.selectedId) {
@@ -1037,12 +1151,12 @@
     if (last && last.fp === listFingerprint() && last.n) {
       lastBit = ' · last #' + last.n;
     }
-    var marked = 0;
+    var tagged = 0;
     for (var mi = 0; mi < rows.length; mi++) {
-      if (triageOf(rows[mi].problem_id).viewed) marked++;
+      if (reviewOf(rows[mi].problem_id)) tagged++;
     }
     $('list-count').textContent = (extra ? ('showing ' + show.length + ' of ' + rows.length) : (rows.length + ' shown')) +
-      ' · ' + marked + ' marked · ' + rows.length + ' total' +
+      ' · ' + tagged + ' tagged · ' + rows.length + ' total' +
       lastBit +
       (state.traceFile ? ' · this trace' : '');
     if (!show.length) {
@@ -1051,22 +1165,20 @@
     }
     var html = '';
     show.forEach(function (p, i) {
-      var t = triageOf(p.problem_id);
+      var rec = reviewOf(p.problem_id);
       var active = p.problem_id === state.selectedId ? ' is-active' : '';
       var where = hasGeo(p) ? (Number(p.lat).toFixed(5) + ', ' + Number(p.lon).toFixed(5)) : 'no coordinates';
       html += '<div class="result-row flex flex--center-cross px12 py12 round mb6 bg-gray-faint' + active +
-        (t.viewed ? ' is-reviewed' : '') +
+        (rec ? ' is-tagged tag-' + escapeHtml(rec.tag) : '') +
         '" data-id="' + escapeHtml(p.problem_id) + '" style="width:100%;text-align:left;cursor:pointer;">' +
-        '<label class="review-check" title="Already reviewed">' +
-        '<input type="checkbox" data-review="' + escapeHtml(p.problem_id) + '"' + (t.viewed ? ' checked' : '') + '>' +
-        '</label>' +
         '<span class="row-num txt-s txt-mono txt-bold mr12">#' + (i + 1) + '</span>' +
         '<span class="pin-dot mr12" style="background:' + qColor(p.q_code) + '"></span>' +
         '<span class="flex-child-grow">' +
         '<div class="txt-s txt-bold color-gray-dark">' + escapeHtml(p.problem_type || p.q_code) +
         ' · ' + escapeHtml(p.severity || '') +
-        (t.label ? ' · ' + escapeHtml(t.label) : '') +
-        (repeatLabel(p) ? ' <span class="repeat-mark">' + escapeHtml(repeatLabel(p)) + '</span>' : '') + '</div>' +
+        (repeatLabel(p) ? ' <button type="button" class="repeat-mark" data-also="' + escapeHtml(p.problem_id) + '" title="Show the other trace file names">' + escapeHtml(repeatLabel(p)) + '</button>' : '') +
+        alsoFilesHtml(p) +
+        tagControls(p) + '</div>' +
         '<div class="txt-s color-gray truncate">' + escapeHtml(p.summary || '') + '</div>' +
         '<div class="txt-xs color-gray">' + escapeHtml(where) + ' · ' + escapeHtml(shortTraceLabel(traceKey(p))) +
         ' · ' + escapeHtml(p.timestamp_utc || 'no time') +
@@ -1121,20 +1233,18 @@
     var vis = filtered();
     var n = indexInList(p.problem_id, vis);
     var total = vis.length;
-    var t = triageOf(p.problem_id);
+    var rec = reviewOf(p.problem_id);
     var meta = p.metadata && typeof p.metadata === 'object' ? p.metadata : {};
     var metaRows = Object.keys(meta).map(function (k) {
       return '<div class="txt-s mb6"><span class="color-gray">' + escapeHtml(k) + ': </span>' + escapeHtml(formatFieldValue(meta[k])) + '</div>';
     }).join('');
     var metadataJson = '';
     try { metadataJson = JSON.stringify(meta, null, 2); } catch (e) { metadataJson = String(meta); }
-    var labelOpts = '<option value="">(none)</option>' + LABELS.map(function (l) {
-      return '<option value="' + l + '"' + (t.label === l ? ' selected' : '') + '>' + l + '</option>';
-    }).join('');
     $('detail-card').innerHTML =
       '<div class="txt-s txt-bold txt-uppercase color-gray txt-spacing1 mb12">Finding' +
       (n ? ' · #' + n + ' of ' + (total || '—') : '') +
       (repeatLabel(p) ? ' · ' + escapeHtml(repeatLabel(p)) : '') + '</div>' +
+      alsoFilesHtml(p) +
       '<div class="txt-m txt-bold color-gray-dark mb6">' + escapeHtml(p.summary || p.problem_type) + '</div>' +
       '<div class="txt-s color-gray mb12">' + escapeHtml(p.q_code) + ' · ' + escapeHtml(p.category) + ' · ' +
       escapeHtml(p.problem_type) + ' · ' + escapeHtml(p.severity) + '</div>' +
@@ -1152,19 +1262,14 @@
       '<div class="txt-s color-gray mb6">metadata_json:</div>' +
       '<pre class="txt-xs txt-mono meta-json">' + escapeHtml(metadataJson) + '</pre>' +
       '</div>' +
-      '<div class="txt-s txt-bold txt-uppercase color-gray txt-spacing1 mb12">Triage</div>' +
-      '<label class="checkbox-container txt-s mb12">' +
-      '<input id="triage-viewed" type="checkbox"' + (t.viewed ? ' checked' : '') + '>' +
-      '<div class="checkbox mr6"></div>Viewed</label>' +
-      '<label class="txt-s txt-bold mb6 block" for="triage-label">Label</label>' +
-      '<div class="select-container mb12"><select id="triage-label" class="select">' + labelOpts + '</select></div>' +
-      '<label class="txt-s txt-bold mb6 block" for="triage-notes">Notes</label>' +
-      '<textarea id="triage-notes" class="textarea mb12" rows="3">' + escapeHtml(t.notes) + '</textarea>' +
-      '<button type="button" class="btn btn--s btn-pill px18" id="triage-save">Save triage</button>';
+      '<div class="txt-s txt-bold txt-uppercase color-gray txt-spacing1 mb12">Tag</div>' +
+      (rec && rec.tag
+        ? '<div class="txt-s color-gray mb6">Undo clears this tag. Then another tag can be set.</div>' + tagControls(p)
+        : '<div class="txt-s color-gray mb6">Set one tag. Undo clears it if the decision changes.</div>' + tagControls(p));
   }
 
   function findTraceByPbf(raw) {
-    var name = String(raw || '').replace(/\s+/g, '').split(/[/\\]/).pop();
+    var name = String(raw || '').trim().split(/[/\\]/).pop();
     if (!name) return { error: 'Paste a trace file name.' };
     var files = [];
     var seen = {};
@@ -1174,28 +1279,31 @@
       seen[file] = true;
       files.push(file);
     }
+    function compact(s) { return String(s || '').replace(/\s+/g, '').toLowerCase(); }
     function one(list) {
       if (list.length === 1) return { key: list[0] };
       if (list.length > 1) return { error: 'Several traces match. Paste a longer name.' };
       return null;
     }
-    if (/\.pbf\.gz$/i.test(name)) {
-      var exact = one(files.filter(function (file) {
-        return file === name || file.slice(-name.length) === name;
-      }));
-      if (exact) return exact;
-    }
+    var wanted = compact(name);
+    var exact = one(files.filter(function (file) {
+      var folded = compact(file);
+      return file === name || folded === wanted || folded.slice(-wanted.length) === wanted;
+    }));
+    if (exact) return exact;
     var stamp = name.match(/^\d{4}-\d{2}-\d{2}T[\d_.:]+Z/);
     if (stamp) {
-      var byStart = one(files.filter(function (file) { return file.indexOf(stamp[0]) === 0; }));
-      if (byStart) return byStart;
+      var hits = files.filter(function (file) { return file.indexOf(stamp[0]) === 0; });
+      if (hits.length === 1) return { key: hits[0] };
+      if (hits.length > 1) return { error: 'Several traces match. Paste a longer name.' };
+      return { error: 'This trace is not in the current list. The board has trips from 17 to 23 Sep 2026.' };
     }
     var loose = one(files.filter(function (file) {
-      return file.indexOf(name) !== -1 || name.indexOf(file) !== -1;
+      return compact(file).indexOf(wanted) !== -1 || wanted.indexOf(compact(file)) !== -1;
     }));
     if (loose) return loose;
-    if (!/\.pbf\.gz$/i.test(name)) return { error: 'The name has to end with .pbf.gz.' };
-    return { error: 'This .pbf.gz is not in the current list.' };
+    if (!/pbf\.gz$/i.test(wanted)) return { error: 'The name has to end with .pbf.gz.' };
+    return { error: 'This trace is not in the current list. The board has trips from 17 to 23 Sep 2026.' };
   }
 
   function runTraceFinder() {
@@ -1261,7 +1369,7 @@
         bucket.sort(function (a, b) { return compareMetric(a, b, sortMode); });
       }
       var items = bucket.map(function (p) {
-        var t = triageOf(p.problem_id);
+        var rec = reviewOf(p.problem_id);
         var active = p.problem_id === state.selectedId ? ' is-active' : '';
         return '<button type="button" class="result-row flex flex--center-cross px12 py12 round mb6 bg-gray-faint' + active +
           '" data-id="' + escapeHtml(p.problem_id) + '" style="width:100%;text-align:left;border:0;cursor:pointer;">' +
@@ -1269,7 +1377,7 @@
           '<span class="flex-child-grow">' +
           '<div class="txt-s txt-bold color-gray-dark">' + escapeHtml(p.problem_type || p.q_code) +
           ' · ' + escapeHtml(p.severity || '') +
-          (t.label ? ' · ' + escapeHtml(t.label) : '') + '</div>' +
+          (rec ? ' · ' + escapeHtml(tagLabel(rec.tag)) : '') + '</div>' +
           '<div class="txt-s color-gray">' + escapeHtml(p.summary || '') + '</div>' +
           '<div class="txt-xs color-gray">' + escapeHtml(p.timestamp_utc || 'no time') +
           (hasGeo(p) ? ' · ' + Number(p.lat).toFixed(5) + ', ' + Number(p.lon).toFixed(5) : '') + '</div>' +
@@ -1325,15 +1433,109 @@
     }
   }
 
-  function setReviewed(id, viewed) {
-    var all = loadTriage();
-    var t = all[id] || { label: '', notes: '', viewed: false };
-    t.viewed = !!viewed;
-    all[id] = t;
-    saveTriage(all);
-    var box = $('triage-viewed');
-    if (box && state.selectedId === id) box.checked = !!viewed;
-    renderList(filtered());
+  function paintReviews() {
+    var vis = filtered();
+    renderKpis(state.problems, vis);
+    renderList(vis);
+    renderReviewStats(vis);
+    renderTracePanel();
+    var selected = state.problems.filter(function (p) { return p.problem_id === state.selectedId; })[0];
+    if (selected) renderDetail(selected);
+  }
+
+  function renderReviewStats(rows) {
+    var box = $('review-stats');
+    var status = $('review-status');
+    if (!box) return;
+    var tags = { true_detection: 0, false_positive: 0, na: 0 };
+    rows.forEach(function (p) {
+      var rec = reviewOf(p.problem_id);
+      if (rec && tags[rec.tag] != null) tags[rec.tag] += 1;
+    });
+    var untagged = rows.length - tags.true_detection - tags.false_positive - tags.na;
+    box.innerHTML =
+      statCell('True Detection', tags.true_detection) +
+      statCell('False positive detection', tags.false_positive) +
+      statCell('N/A', tags.na) +
+      statCell('Not tagged', untagged);
+    if (!status) return;
+    if (state.reviewError) status.textContent = state.reviewError;
+    else if (state.reviewLive) {
+      status.textContent = 'Shared with everyone on this server. ' + rows.length + ' findings in this filter. Undo clears a tag so it can be changed.';
+    } else status.textContent = 'Shared tags are off. Start serve_board.py so every reviewer sees the same tags.';
+  }
+
+  function statCell(label, n) {
+    return '<div class="review-stat"><div class="txt-xs color-gray mb6">' + escapeHtml(label) +
+      '</div><div class="num">' + n.toLocaleString() + '</div></div>';
+  }
+
+  function assignTag(id, tag) {
+    if (!id || !tagMeta(tag)) return;
+    if (reviewOf(id)) return;
+    var name = reviewerName();
+    if (!name) {
+      state.reviewError = 'Enter your name, then set the tag.';
+      var input = $('reviewer-name');
+      if (input) input.focus();
+      renderReviewStats(filtered());
+      return;
+    }
+    try { localStorage.setItem(REVIEWER_KEY, name); } catch (e) {}
+    if (!state.reviewLive) {
+      state.reviewError = 'Shared tags are off. Start serve_board.py and reopen this page.';
+      renderReviewStats(filtered());
+      return;
+    }
+    fetch('/api/reviews', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ problem_id: id, tag: tag, reviewer: name })
+    }).then(function (res) {
+      return res.json().then(function (body) { return { status: res.status, body: body }; });
+    }).then(function (result) {
+      var review = result.body && result.body.review;
+      if (result.status === 200 && review) {
+        state.reviews[id] = review;
+        state.reviewError = '';
+      } else if (review) {
+        state.reviews[id] = review;
+        state.reviewError = 'Already tagged by ' + (review.reviewer || 'another reviewer') + '.';
+      } else {
+        state.reviewError = 'Could not save the tag.';
+      }
+      paintReviews();
+    }).catch(function () {
+      state.reviewError = 'Could not save the tag. Check that serve_board.py is running.';
+      renderReviewStats(filtered());
+    });
+  }
+
+  function clearTag(id) {
+    if (!id || !reviewOf(id)) return;
+    if (!state.reviewLive) {
+      state.reviewError = 'Shared tags are off. Start serve_board.py and reopen this page.';
+      renderReviewStats(filtered());
+      return;
+    }
+    fetch('/api/reviews', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ problem_id: id })
+    }).then(function (res) {
+      return res.json().then(function (body) { return { status: res.status, body: body }; });
+    }).then(function (result) {
+      if (result.status === 200) {
+        delete state.reviews[id];
+        state.reviewError = '';
+      } else {
+        state.reviewError = 'Could not clear the tag.';
+      }
+      paintReviews();
+    }).catch(function () {
+      state.reviewError = 'Could not clear the tag. Check that serve_board.py is running.';
+      renderReviewStats(filtered());
+    });
   }
 
   function selectFinding(id, fly) {
@@ -1382,20 +1584,6 @@
     }
   }
 
-  function saveCurrentTriage() {
-    if (!state.selectedId) return;
-    var all = loadTriage();
-    all[state.selectedId] = {
-      label: $('triage-label').value,
-      notes: $('triage-notes').value,
-      viewed: $('triage-viewed').checked
-    };
-    saveTriage(all);
-    refresh();
-    var p = state.problems.filter(function (x) { return x.problem_id === state.selectedId; })[0];
-    renderDetail(p);
-  }
-
   function refresh() {
     if ($('list-sort') && $('filter-sort')) $('list-sort').value = $('filter-sort').value;
     var vis = filtered();
@@ -1405,6 +1593,7 @@
     fillSelect($('filter-type'), unique(state.category ? state.problems.filter(function (p) { return p.category === state.category; }) : state.problems, 'problem_type'), 'All types');
     drawMap(vis);
     renderList(vis);
+    renderReviewStats(vis);
     renderTracePanel();
     var selected = vis.filter(function (p) { return p.problem_id === state.selectedId; })[0];
     if (!selected) {
@@ -1422,18 +1611,17 @@
   }
 
   function exportTriage() {
-    var all = loadTriage();
-    var lines = [['problem_id', 'label', 'viewed', 'notes', 'q_code', 'problem_type', 'severity', 'lat', 'lon', 'summary'].join(',')];
-    Object.keys(all).forEach(function (id) {
-      var t = all[id];
+    var lines = [['problem_id', 'tag', 'reviewer', 'at', 'q_code', 'problem_type', 'severity', 'lat', 'lon', 'summary'].join(',')];
+    Object.keys(state.reviews).forEach(function (id) {
+      var t = state.reviews[id];
       var p = state.problems.filter(function (x) { return x.problem_id === id; })[0] || {};
       function csv(v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }
-      lines.push([id, t.label, t.viewed, t.notes, p.q_code, p.problem_type, p.severity, p.lat, p.lon, p.summary].map(csv).join(','));
+      lines.push([id, tagLabel(t.tag), t.reviewer, t.at, p.q_code, p.problem_type, p.severity, p.lat, p.lon, p.summary].map(csv).join(','));
     });
     var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'triage-export.csv';
+    a.download = 'review-tags.csv';
     a.click();
   }
 
@@ -1452,7 +1640,7 @@
       });
       ev.target.value = '';
     });
-    ['search', 'filter-severity', 'filter-label', 'filter-viewed',
+    ['search', 'filter-severity', 'filter-label',
       'filter-project', 'filter-platform', 'filter-vehicle', 'filter-user', 'filter-from', 'filter-to', 'filter-geo'
     ].forEach(function (id) {
       $(id).addEventListener('input', refresh);
@@ -1493,21 +1681,43 @@
       refresh();
     });
     $('result-list').addEventListener('click', function (e) {
-      if (e.target.closest('.review-check') || e.target.closest('.dd-link')) {
+      var undo = e.target.closest('.tag-undo');
+      if (undo) {
         e.stopPropagation();
+        clearTag(undo.getAttribute('data-id'));
+        return;
+      }
+      if (e.target.closest('.tag-btn')) {
+        e.stopPropagation();
+        var btn = e.target.closest('.tag-btn');
+        assignTag(btn.getAttribute('data-id'), btn.getAttribute('data-tag'));
+        return;
+      }
+      if (e.target.closest('.dd-link') || e.target.closest('.also-files')) {
+        e.stopPropagation();
+        return;
+      }
+      var badge = e.target.closest('.repeat-mark');
+      if (badge) {
+        var alsoId = badge.getAttribute('data-also');
+        state.showAlsoId = state.showAlsoId === alsoId ? '' : alsoId;
+        if (state.showAlsoId) selectFinding(alsoId, true);
+        else refresh();
         return;
       }
       var row = e.target.closest('[data-id]');
       if (!row) return;
       selectFinding(row.getAttribute('data-id'), true);
     });
-    $('result-list').addEventListener('change', function (e) {
-      var box = e.target;
-      if (!box || !box.getAttribute || !box.getAttribute('data-review')) return;
-      setReviewed(box.getAttribute('data-review'), box.checked);
-    });
     $('detail-card').addEventListener('click', function (e) {
-      if (e.target.id === 'triage-save') saveCurrentTriage();
+      var undo = e.target.closest('.tag-undo');
+      if (undo) {
+        clearTag(undo.getAttribute('data-id'));
+        return;
+      }
+      var btn = e.target.closest('.tag-btn');
+      if (!btn) return;
+      assignTag(btn.getAttribute('data-id'), btn.getAttribute('data-tag'));
     });
     $('trace-name-bar').addEventListener('click', function (e) {
       var open = e.target.closest('#open-trace');
@@ -1523,11 +1733,45 @@
     });
   }
 
+  function syncReviews(forcePaint) {
+    return fetch('/api/reviews', { cache: 'no-store' }).then(function (res) {
+      if (!res.ok) throw new Error('no api');
+      return res.json();
+    }).then(function (data) {
+      var next = (data && data.reviews) || {};
+      var changed = JSON.stringify(next) !== JSON.stringify(state.reviews);
+      state.reviews = next;
+      state.reviewLive = true;
+      if (!changed && !forcePaint) return;
+      state.reviewError = '';
+      if (state.problems.length) paintReviews();
+    }).catch(function () {
+      var wasLive = state.reviewLive;
+      state.reviewLive = false;
+      if (wasLive || forcePaint) {
+        state.reviewError = '';
+        if (state.problems.length) renderReviewStats(filtered());
+      }
+    });
+  }
+
+  function initReviewer() {
+    var el = $('reviewer-name');
+    if (!el) return;
+    try { el.value = localStorage.getItem(REVIEWER_KEY) || ''; } catch (e) {}
+    el.addEventListener('change', function () {
+      try { localStorage.setItem(REVIEWER_KEY, el.value.trim()); } catch (e) {}
+    });
+  }
+
   bind();
+  initReviewer();
   if (window.TRACE_PROBLEMS) {
     ingest(window.TRACE_PROBLEMS, 'bundled snapshot');
   } else {
     $('data-status').textContent = 'No bundled data. Use Load file.';
     ensureMap();
   }
+  syncReviews(true);
+  setInterval(function () { syncReviews(false); }, 4000);
 })();
