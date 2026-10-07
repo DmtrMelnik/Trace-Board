@@ -26,13 +26,33 @@
     .tag-btn:hover { background: #e7f0ff; }
     .tag-undo { border: 0; background: transparent; padding: 2px 6px; font-size: 12px; font-weight: 700; cursor: pointer; color: #757d82; }
     .tag-undo:hover { color: #dc2b28; }
+    .type-picker { position: relative; }
+    .type-trigger { width: 100%; text-align: left; background: #fff; border: 1px solid #c6cdd1; border-radius: 4px; min-height: 36px; padding: 7px 32px 7px 10px; font: inherit; font-size: 14px; color: #0f1720; cursor: pointer; position: relative; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .type-trigger::after { content: ""; position: absolute; right: 12px; top: 50%; margin-top: -2px; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 6px solid #0f71fa; }
+    .type-panel { display: none; position: absolute; z-index: 30; left: 0; top: calc(100% + 4px); width: 280px; max-height: 320px; overflow: auto; background: #fff; border: 1px solid #d4d8da; border-radius: 10px; box-shadow: 0 8px 24px rgba(14,16,18,.14); }
+    .type-picker.is-open .type-panel { display: block; }
+    .type-option { display: flex; align-items: flex-start; gap: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+    .type-option:hover { background: #f4f7fb; }
+    .type-option input { margin-top: 2px; }
+    .type-panel-foot { position: sticky; bottom: 0; display: flex; justify-content: flex-end; padding: 8px 10px; background: #fff; border-top: 1px solid #eceff1; }
+    .select-container { position: relative; }
+    .select-container .select { appearance: none; -webkit-appearance: none; padding-right: 32px; }
+    .select-container::after { content: ""; position: absolute; right: 12px; top: 50%; margin-top: -2px; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 6px solid #0f71fa; pointer-events: none; }
+    .line-arrow { background: transparent; border: 0; }
+    .line-arrow div { width: 14px; height: 14px; line-height: 0; }
+    #validator-bar.is-missing { animation: validator-blink 0.45s ease-in-out 4; }
+    @keyframes validator-blink { 0%, 100% { box-shadow: inset 0 0 0 2px transparent; } 50% { box-shadow: inset 0 0 0 2px #dc2b28; background: #fde8e7; } }
+    #validator-apply { min-width: 42px; font-weight: 700; }
     .tag-pill { display: inline-block; margin-top: 8px; margin-right: 6px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
     .tag-true_detection { background: #e5f6ee; color: #1b7f4e; }
     .tag-false_positive { background: #fde8e7; color: #dc2b28; }
     .tag-na { background: #eef0f1; color: #4d5255; }
-    .review-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-    .review-stat { background: #f7f8f8; border-radius: 8px; padding: 10px 12px; }
-    .review-stat .num { font-size: 22px; font-weight: 700; color: #0f1720; }
+    .filters-section { position: relative; z-index: 40; }
+    .board-stage { position: relative; z-index: 1; }
+    .type-picker.is-open { z-index: 60; }
+    #review-stats { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); gap: 12px; }
+    #review-stats .validation-card { margin: 0; min-height: 132px; height: 100%; background: #fff; }
+    @media (max-width: 980px) { #review-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     .dd-link { flex: 0 0 auto; margin-left: 8px; text-decoration: none; white-space: nowrap; }
     .trace-block-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: #fff; border: 0; border-left: 3px solid #4264fb; padding: 8px 10px; margin: 10px 0 6px; border-radius: 0 8px 8px 0; box-shadow: 0 1px 0 rgba(14,16,18,.06); cursor: pointer; }
     .trace-block-head.is-active { background: #e7f0ff; box-shadow: inset 0 0 0 2px #0f71fa; }
@@ -101,13 +121,6 @@
       <div class='px24 grid grid--gut24' id='kpi-row'></div>
     </section>
 
-    <section class='pb12'>
-      <div class='px24'>
-        <div class='txt-s txt-bold txt-uppercase color-gray txt-spacing1 mb12'>By Q-code</div>
-        <div class='flex flex--wrap' id='q-chips'></div>
-      </div>
-    </section>
-
     <section class='pb18'>
       <div class='px24'>
         <div class='txt-s txt-bold txt-uppercase color-gray txt-spacing1 mb12'>Category</div>
@@ -115,7 +128,7 @@
       </div>
     </section>
 
-    <section class='pb24'>
+    <section class='pb24 filters-section'>
       <div class='px24'>
         <div class='card py24 px24'>
           <div class='grid grid--gut12'>
@@ -132,9 +145,15 @@
               <input id='search' class='input' type='search' placeholder='summary or problem_id'>
             </div>
             <div class='col w-1/2 w-1/6-ml mb12'>
-              <label class='txt-s txt-bold mb6 block' for='filter-type'>problem_type</label>
-              <div class='select-container'>
-                <select id='filter-type' class='select'><option value=''>All types</option></select>
+              <label class='txt-s txt-bold mb6 block' for='type-trigger'>problem_type</label>
+              <div class='type-picker' id='type-picker'>
+                <button type='button' class='type-trigger' id='type-trigger' aria-haspopup='true' aria-expanded='false'>All types</button>
+                <div class='type-panel' id='type-panel'>
+                  <div id='type-options'></div>
+                  <div class='type-panel-foot'>
+                    <button type='button' class='btn btn--s btn-pill px18' id='type-upload'>Upload</button>
+                  </div>
+                </div>
               </div>
             </div>
             <div class='col w-1/2 w-1/6-ml mb12'>
@@ -152,21 +171,8 @@
               <label class='txt-s txt-bold mb6 block' for='filter-sort'>Sort</label>
               <div class='select-container'>
                 <select id='filter-sort' class='select'>
-                  <option value='severity' selected>Severity</option>
-                  <option value='time'>Time</option>
-                  <option value='q'>Q-code</option>
-                  <option value='div_desc'>Divergence + lasting (high→low)</option>
-                  <option value='div_asc'>Divergence + lasting (low→high)</option>
-                  <option value='poor_desc'>Driver stopped (high→low)</option>
-                  <option value='poor_asc'>Driver stopped (low→high)</option>
-                  <option value='eta_desc'>ETA impact (high→low)</option>
-                  <option value='eta_asc'>ETA impact (low→high)</option>
-                  <option value='soc_desc'>SOC prediction error (high→low)</option>
-                  <option value='soc_asc'>SOC prediction error (low→high)</option>
-                  <option value='incident_desc'>Incident length (high→low)</option>
-                  <option value='incident_asc'>Incident length (low→high)</option>
-                  <option value='overpred_desc'>Over-pred speed gap (high→low)</option>
-                  <option value='overpred_asc'>Over-pred speed gap (low→high)</option>
+                  <option value='severity' selected>Severity, high first</option>
+                  <option value='time'>Time, newest first</option>
                 </select>
               </div>
             </div>
@@ -196,7 +202,7 @@
             </div>
             <div class='col w-1/2 w-1/6-ml mb12'>
               <label class='txt-s txt-bold mb6 block' for='filter-vehicle'>VIN</label>
-              <input id='filter-vehicle' class='input' type='search' placeholder='vehicle'>
+              <input id='filter-vehicle' class='input' type='search' placeholder='WP0ZZZ…'>
             </div>
             <div class='col w-1/2 w-1/6-ml mb12'>
               <label class='txt-s txt-bold mb6 block' for='filter-user'>User ID</label>
@@ -210,19 +216,12 @@
               <label class='txt-s txt-bold mb6 block' for='filter-to'>To (UTC)</label>
               <input id='filter-to' class='input' type='date'>
             </div>
-            <div class='col w-full w-1/6-ml mb12 flex flex--center-cross'>
-              <label class='checkbox-container txt-s'>
-                <input id='filter-geo' type='checkbox'>
-                <div class='checkbox mr6'></div>
-                Coordinates only
-              </label>
-            </div>
           </div>
         </div>
       </div>
     </section>
 
-    <section class='pb36'>
+    <section class='pb36 board-stage'>
       <div class='px24 grid grid--gut24'>
         <div class='col w-full w-1/2-ml mb24'>
           <div class='card px18 py12 mb12' id='trace-name-bar' hidden></div>
@@ -233,6 +232,14 @@
           </div>
         </div>
         <div class='col w-full w-1/2-ml mb24'>
+          <div class='card px18 py12 mb12' id='validator-bar'>
+            <label class='txt-s txt-bold txt-uppercase color-gray txt-spacing1 mb6 block' for='reviewer-name'>Validator</label>
+            <div class='flex'>
+              <input id='reviewer-name' class='input flex-child-grow' type='text' placeholder='Your name' autocomplete='name'>
+              <button type='button' class='btn btn--s btn-pill px12 ml6' id='validator-apply' title='Apply this name' aria-label='Apply name'>✓</button>
+            </div>
+            <div class='txt-xs color-gray mt6' id='validator-hint'></div>
+          </div>
           <div class='card px18 py18'>
             <div class='flex flex--space-between-main flex--center-cross mb12'>
               <div class='txt-s txt-bold txt-uppercase color-gray txt-spacing1'>Matching findings</div>
@@ -240,41 +247,33 @@
                 <label class='txt-s color-gray mr6' for='list-sort'>Sort</label>
                 <div class='select-container mr12' style='min-width:240px'>
                   <select id='list-sort' class='select'>
-                    <option value='severity'>Severity</option>
-                    <option value='time'>Time</option>
-                    <option value='q'>Q-code</option>
-                    <option value='div_desc'>Divergence + lasting (high→low)</option>
-                    <option value='div_asc'>Divergence + lasting (low→high)</option>
-                    <option value='poor_desc'>Driver stopped (high→low)</option>
-                    <option value='poor_asc'>Driver stopped (low→high)</option>
-                    <option value='eta_desc'>ETA impact (high→low)</option>
-                    <option value='eta_asc'>ETA impact (low→high)</option>
-                    <option value='soc_desc'>SOC prediction error (high→low)</option>
-                    <option value='soc_asc'>SOC prediction error (low→high)</option>
-                    <option value='incident_desc'>Incident length (high→low)</option>
-                    <option value='incident_asc'>Incident length (low→high)</option>
-                    <option value='overpred_desc'>Over-pred speed gap (high→low)</option>
-                    <option value='overpred_asc'>Over-pred speed gap (low→high)</option>
+                    <option value='severity'>Severity, high first</option>
+                    <option value='time'>Time, newest first</option>
                   </select>
                 </div>
                 <div class='txt-s color-gray' id='list-count'></div>
               </div>
             </div>
             <div class='result-list' id='result-list'></div>
-            <div class='mt18 pt18' style='border-top:1px solid #e6e8ea;'>
-              <div class='flex flex--space-between-main flex--center-cross mb12'>
-                <div class='txt-s txt-bold txt-uppercase color-gray txt-spacing1'>Review</div>
-                <label class='txt-s color-gray flex flex--center-cross'>Your name
-                  <input id='reviewer-name' class='input ml6' type='text' placeholder='name' autocomplete='name' style='width:160px;'>
-                </label>
-              </div>
-              <div id='review-stats'></div>
-              <div class='txt-s color-gray mt12' id='review-status'></div>
-            </div>
           </div>
         </div>
       </div>
       <div class='px24' id='trace-panel' hidden></div>
+      <div class='px24 mt18'>
+        <div class='card px18 py18'>
+          <div class='flex flex--space-between-main flex--end-cross mb18'>
+            <div class='txt-s txt-bold txt-uppercase color-gray txt-spacing1'>Validation</div>
+            <div style='min-width:240px;'>
+              <label class='txt-xs color-gray mb6 block' for='validation-type'>problem_type</label>
+              <div class='select-container'>
+                <select id='validation-type' class='select'><option value=''>All types</option></select>
+              </div>
+            </div>
+          </div>
+          <div id='review-stats' class='review-stats'></div>
+          <div class='txt-s color-gray mt12' id='review-status'></div>
+        </div>
+      </div>
     </section>
   </main>
 

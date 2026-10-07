@@ -43,7 +43,11 @@
     showAlsoId: '',
     reviews: {},
     reviewLive: false,
-    reviewError: ''
+    reviewError: '',
+    validatorName: '',
+    tunnelByTrace: {},
+    types: [],
+    validationType: ''
   };
 
   var map, overlayLayer;
@@ -74,12 +78,36 @@
   }
 
   function reviewerName() {
-    var el = $('reviewer-name');
-    var name = el ? String(el.value || '').trim() : '';
+    return String(state.validatorName || '').trim();
+  }
+
+  function flashValidator() {
+    var bar = $('validator-bar');
+    var hint = $('validator-hint');
+    if (hint) hint.textContent = 'Enter your name, press the check mark, then set the tag.';
+    if (!bar) return;
+    bar.classList.remove('is-missing');
+    void bar.offsetWidth;
+    bar.classList.add('is-missing');
+    var input = $('reviewer-name');
+    if (input) input.focus();
+  }
+
+  function applyValidator() {
+    var input = $('reviewer-name');
+    var name = input ? String(input.value || '').trim() : '';
     if (!name) {
-      try { name = String(localStorage.getItem(REVIEWER_KEY) || '').trim(); } catch (e) {}
+      flashValidator();
+      return;
     }
-    return name;
+    state.validatorName = name;
+    try { localStorage.setItem(REVIEWER_KEY, name); } catch (e) {}
+    var bar = $('validator-bar');
+    if (bar) bar.classList.remove('is-missing');
+    var hint = $('validator-hint');
+    if (!hint) return;
+    if (state.reviewLive) hint.textContent = name + ' can set tags. They are shared on this server.';
+    else hint.textContent = name + ' is set. This page cannot save tags. Open the review server to share them.';
   }
 
   function unique(list, key) {
@@ -107,6 +135,68 @@
       sel.appendChild(o);
     });
     if (values.indexOf(keep) !== -1) sel.value = keep;
+  }
+
+  function typePool() {
+    return state.category
+      ? state.problems.filter(function (p) { return p.category === state.category; })
+      : state.problems;
+  }
+
+  function updateTypeLabel() {
+    var btn = $('type-trigger');
+    if (!btn) return;
+    if (!state.types.length) {
+      btn.textContent = 'All types';
+      btn.title = '';
+    } else if (state.types.length === 1) {
+      btn.textContent = state.types[0];
+      btn.title = state.types[0];
+    } else {
+      btn.textContent = state.types.join(', ');
+      btn.title = state.types.join(', ');
+    }
+  }
+
+  function syncTypeChecks() {
+    var boxes = $('type-options').querySelectorAll('input[type=checkbox]');
+    Array.prototype.forEach.call(boxes, function (box) {
+      box.checked = state.types.indexOf(box.value) !== -1;
+    });
+  }
+
+  function fillTypeOptions() {
+    var values = unique(typePool(), 'problem_type');
+    var box = $('type-options');
+    if (!box) return;
+    var sig = values.join('\n');
+    var open = $('type-picker').classList.contains('is-open');
+    if (box.getAttribute('data-sig') === sig) {
+      if (!open) syncTypeChecks();
+      updateTypeLabel();
+      return;
+    }
+    state.types = state.types.filter(function (t) { return values.indexOf(t) !== -1; });
+    box.setAttribute('data-sig', sig);
+    box.innerHTML = values.map(function (v) {
+      var on = state.types.indexOf(v) !== -1 ? ' checked' : '';
+      return '<label class="type-option"><input type="checkbox" value="' + escapeHtml(v) + '"' + on + '><span>' + escapeHtml(v) + '</span></label>';
+    }).join('');
+    updateTypeLabel();
+  }
+
+  function applyTypes() {
+    var next = [];
+    Array.prototype.forEach.call($('type-options').querySelectorAll('input[type=checkbox]'), function (box) {
+      if (box.checked) next.push(box.value);
+    });
+    state.types = next;
+    $('type-picker').classList.remove('is-open');
+    $('type-trigger').setAttribute('aria-expanded', 'false');
+    updateTypeLabel();
+    applySuggestedSort();
+    state.shouldFit = true;
+    refresh();
   }
 
   function parseCsv(text) {
@@ -201,9 +291,22 @@
     } else if (payload && Array.isArray(payload.findings)) problems = payload.findings;
     else if (payload && Array.isArray(payload.problems)) problems = payload.problems;
 
-    problems = problems.filter(function (p) { return !isExcludedTrace(p) && !hideProblemType(p); });
+    state.tunnelByTrace = {};
+    problems.forEach(function (p) {
+      if (p.problem_type !== 'tunnel_degraded' && p.problem_type !== 'tunnel_section') return;
+      if (!hasGeo(p)) return;
+      var key = traceKey(p);
+      if (!state.tunnelByTrace[key]) state.tunnelByTrace[key] = [];
+      state.tunnelByTrace[key].push([Number(p.lat), Number(p.lon)]);
+    });
+    problems = problems.filter(function (p) {
+      if (hideProblemType(p) || hideUnlimitedSpeedLimit(p)) return false;
+      if (isExcludedTrace(p) && p.problem_type !== 'speed_limit_missing') return false;
+      return true;
+    });
     problems.forEach(function (p) {
       if (p.problem_type === 'stale_incident') p.problem_type = 'outdate_incident';
+      if (p.problem_type === 'gps_divergence') p.severity = gpsListSeverity(p);
     });
     markRepeatPlaces(problems);
     if (problems.length) {
@@ -223,33 +326,31 @@
   function currentFilters() {
     return {
       search: $('search').value.trim().toLowerCase(),
-      type: $('filter-type').value,
+      types: state.types.slice(),
       severity: $('filter-severity').value,
       sort: $('filter-sort').value,
       label: $('filter-label').value,
       project: $('filter-project').value,
       platform: $('filter-platform').value,
-      vehicle: $('filter-vehicle').value.trim().toLowerCase(),
-      user: $('filter-user').value.trim().toLowerCase(),
+      vehicle: $('filter-vehicle').value.trim().toLowerCase().replace(/[\s-]/g, ''),
+      user: $('filter-user').value.trim().toLowerCase().replace(/[\s-]/g, ''),
       from: $('filter-from').value,
       to: $('filter-to').value,
-      geoOnly: $('filter-geo').checked,
       category: state.category,
       qCode: state.qCode
     };
   }
 
   function matches(p, f) {
-    if (hideDividedOneway(p) || hideUnlimitedSpeedLimit(p) || hideProblemType(p)) return false;
+    if (hideDividedOneway(p) || hideUnlimitedSpeedLimit(p) || hideProblemType(p) || hideObviousTunnelDivergence(p)) return false;
     if (f.category && p.category !== f.category) return false;
     if (f.qCode && p.q_code !== f.qCode) return false;
-    if (f.type && p.problem_type !== f.type) return false;
+    if (f.types.length && f.types.indexOf(p.problem_type) === -1) return false;
     if (f.severity && p.severity !== f.severity) return false;
-    if (f.project && p.project !== f.project) return false;
+    if (f.project && !projectMatches(p, f.project)) return false;
     if (f.platform && p.platform !== f.platform) return false;
-    if (f.geoOnly && !hasGeo(p)) return false;
-    if (f.vehicle && String(p.vehicle || '').toLowerCase().indexOf(f.vehicle) === -1) return false;
-    if (f.user && String(p.user_id || '').toLowerCase().indexOf(f.user) === -1) return false;
+    if (f.vehicle && String(p.vehicle || '').toLowerCase().replace(/[\s-]/g, '').indexOf(f.vehicle) === -1) return false;
+    if (f.user && String(p.user_id || '').toLowerCase().replace(/[\s-]/g, '').indexOf(f.user) === -1) return false;
     if (f.from && (p.timestamp_utc || '') < f.from) return false;
     if (f.to && (p.timestamp_utc || '') > (f.to + 'T23:59:59Z')) return false;
     var tag = (reviewOf(p.problem_id) || {}).tag || '';
@@ -267,6 +368,26 @@
     if (!p || p.problem_type !== 'oneway_against') return false;
     var way = String((p.metadata && p.metadata.osm_way) || '');
     return /(^|[\s;#])A\s*\d/.test(way) || /(^|[\s;#])B\s*\d/.test(way);
+  }
+
+  function gpsListSeverity(p) {
+    var meters = metricDivergenceM(p);
+    if (meters == null) {
+      var raw = parseFloat(String((p.metadata && p.metadata['worst dist']) || ''));
+      meters = isFinite(raw) ? raw : 0;
+    }
+    return meters >= 15 ? 'high' : 'medium';
+  }
+
+  function hideObviousTunnelDivergence(p) {
+    if (!p || p.problem_type !== 'gps_divergence' || !hasGeo(p)) return false;
+    var pts = state.tunnelByTrace[traceKey(p)] || [];
+    var lat = Number(p.lat);
+    var lon = Number(p.lon);
+    for (var i = 0; i < pts.length; i++) {
+      if (haversineM(lat, lon, pts[i][0], pts[i][1]) <= 80) return true;
+    }
+    return false;
   }
 
   function hideUnlimitedSpeedLimit(p) {
@@ -426,31 +547,33 @@
     return '';
   }
 
+  function typeFilterOn(name) {
+    return state.types.length > 0 && state.types.indexOf(name) !== -1;
+  }
+
+  function projectMatches(p, id) {
+    var name = String((p && p.project) || '').toLowerCase();
+    if (id === 'porsche') return name.indexOf('porsche') !== -1;
+    if (id === 'bmw') return name.indexOf('bmw') !== -1;
+    if (id === 'dash') return name.indexOf('dash') !== -1;
+    return false;
+  }
+
+  function fillProjectSelect() {
+    var sel = $('filter-project');
+    var keep = sel.value;
+    sel.innerHTML = '';
+    [['', 'All'], ['porsche', 'Porsche'], ['bmw', 'BMW'], ['dash', 'Dash']].forEach(function (pair) {
+      var o = document.createElement('option');
+      o.value = pair[0];
+      o.textContent = pair[1];
+      sel.appendChild(o);
+    });
+    if (keep === 'porsche' || keep === 'bmw' || keep === 'dash') sel.value = keep;
+  }
+
   function suggestedSort() {
-    var type = $('filter-type').value;
-    var byType = {
-      gps_divergence: 'div_desc',
-      poor_arrival: 'poor_desc',
-      route_change: 'eta_desc',
-      off_route: 'eta_desc',
-      net_eta_impact: 'eta_desc',
-      soc_arrival_error: 'soc_desc',
-      soc_prediction_error: 'soc_desc',
-      route_incident: 'incident_desc',
-      congestion_signal: 'overpred_desc'
-    };
-    if (byType[type]) return byType[type];
-    var byQ = { Q4: 'div_desc', Q2: 'poor_desc', Q1: 'eta_desc', Q_EV: 'soc_desc', Q10: 'incident_desc', Q3: 'overpred_desc' };
-    if (byQ[state.qCode]) return byQ[state.qCode];
-    var byCat = {
-      gps_divergence: 'div_desc',
-      route_completion: 'poor_desc',
-      route_changes: 'eta_desc',
-      ev: 'soc_desc',
-      route_incidents: 'incident_desc',
-      traffic: 'overpred_desc'
-    };
-    return byCat[state.category] || null;
+    return null;
   }
 
   function setSort(mode) {
@@ -738,21 +861,8 @@
     var cVis = counts(vis);
     $('kpi-row').innerHTML =
       kpiCard('Findings', cVis.n.toLocaleString(), 'of ' + cAll.n.toLocaleString() + ' loaded') +
-      kpiCard('With coordinates', cVis.geo.toLocaleString(), cAll.geo.toLocaleString() + ' in snapshot') +
       kpiCard('High severity', (cVis.bySev.high || 0).toLocaleString(), 'medium ' + (cVis.bySev.medium || 0)) +
       kpiCard('Tagged', cVis.tagged.toLocaleString(), 'of ' + cVis.n.toLocaleString() + ' in this filter');
-  }
-
-  function renderQChips(all) {
-    var c = counts(all).byQ;
-    var keys = Object.keys(c).sort();
-    var html = '<button type="button" class="btn btn--s btn-pill px12 mr6 mb6 q-chip' + (state.qCode ? ' btn--stroke' : '') + '" data-q="">All Q</button>';
-    keys.forEach(function (q) {
-      var active = state.qCode === q;
-      html += '<button type="button" class="btn btn--s btn-pill px12 mr6 mb6 q-chip' + (active ? '' : ' btn--stroke') + '" data-q="' + q + '">' +
-        '<span class="legend-swatch" style="background:' + qColor(q) + '"></span>' + q + ' · ' + c[q] + '</button>';
-    });
-    $('q-chips').innerHTML = html;
   }
 
   function renderTabs(all) {
@@ -877,7 +987,7 @@
   }
 
   function divergenceRowsForLines(rows) {
-    var typeOn = $('filter-type') && $('filter-type').value === 'gps_divergence';
+    var typeOn = typeFilterOn('gps_divergence');
     if (typeOn) {
       return rows.filter(function (p) { return p.problem_type === 'gps_divergence'; });
     }
@@ -895,7 +1005,7 @@
   }
 
   function offRouteRows(rows) {
-    var typeOn = $('filter-type') && $('filter-type').value === 'off_route';
+    var typeOn = typeFilterOn('off_route');
     if (typeOn) return rows.filter(function (p) { return p.problem_type === 'off_route'; });
     var lit = state.litPlaces || {};
     var keys = Object.keys(lit);
@@ -911,7 +1021,7 @@
   }
 
   function missedRoadRows(rows) {
-    var typeOn = $('filter-type') && $('filter-type').value === 'missed_road';
+    var typeOn = typeFilterOn('missed_road');
     if (typeOn) return rows.filter(function (p) { return p.problem_type === 'missed_road'; });
     var lit = state.litPlaces || {};
     var keys = Object.keys(lit);
@@ -924,6 +1034,59 @@
     return rows.filter(function (p) {
       return p.problem_id === state.selectedId && p.problem_type === 'missed_road';
     });
+  }
+
+  function bearingDeg(a, b) {
+    var lat1 = a[0] * Math.PI / 180;
+    var lat2 = b[0] * Math.PI / 180;
+    var dlon = (b[1] - a[1]) * Math.PI / 180;
+    var y = Math.sin(dlon) * Math.cos(lat2);
+    var x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dlon);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+
+  function spotAlong(latlngs, cum, dist) {
+    var last = latlngs.length - 1;
+    if (dist <= 0) return { at: latlngs[0], deg: bearingDeg(latlngs[0], latlngs[1]) };
+    var total = cum[last];
+    if (dist >= total) return { at: latlngs[last], deg: bearingDeg(latlngs[last - 1], latlngs[last]) };
+    var i = 1;
+    while (i < cum.length && cum[i] < dist) i += 1;
+    var span = cum[i] - cum[i - 1];
+    var t = span > 0 ? (dist - cum[i - 1]) / span : 0;
+    var a = latlngs[i - 1];
+    var b = latlngs[i];
+    return {
+      at: [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t],
+      deg: bearingDeg(a, b)
+    };
+  }
+
+  function addFlowArrows(latlngs, group) {
+    if (!latlngs || latlngs.length < 2) return;
+    var cum = [0];
+    for (var i = 1; i < latlngs.length; i++) {
+      cum.push(cum[i - 1] + haversineM(latlngs[i - 1][0], latlngs[i - 1][1], latlngs[i][0], latlngs[i][1]));
+    }
+    if (cum[cum.length - 1] < 1) return;
+    var total = cum[cum.length - 1];
+    [0, 0.5, 1].forEach(function (frac) {
+      var spot = spotAlong(latlngs, cum, total * frac);
+      var icon = L.divIcon({
+        className: 'line-arrow',
+        html: '<div style="transform:rotate(' + spot.deg.toFixed(0) + 'deg)"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><polygon points="7,1 13,13 1,13" fill="#111111"/></svg></div>',
+        iconSize: [14, 14],
+        iconAnchor: [7, 7]
+      });
+      L.marker(spot.at, { icon: icon, interactive: false, keyboard: false }).addTo(group);
+    });
+  }
+
+  function drawStroke(group, latlngs, color) {
+    if (!latlngs || latlngs.length < 2) return false;
+    L.polyline(latlngs, { color: color, weight: 5, opacity: 0.95 }).addTo(group);
+    addFlowArrows(latlngs, group);
+    return true;
   }
 
   function drawDivergenceLines(rows) {
@@ -944,14 +1107,8 @@
       var lon = Number(p.lon);
       var matched = clipAroundPin(p.metadata.matched_line, lat, lon);
       var drive = clipAroundPin(p.metadata.gps_line, lat, lon);
-      if (matched) {
-        L.polyline(matched, { color: '#0f71fa', weight: 5, opacity: 0.9 }).addTo(group);
-        n += 1;
-      }
-      if (drive) {
-        L.polyline(drive, { color: '#dc2b28', weight: 5, opacity: 0.95 }).addTo(group);
-        n += 1;
-      }
+      if (drawStroke(group, matched, '#0f71fa')) n += 1;
+      if (drawStroke(group, drive, '#dc2b28')) n += 1;
     });
     offRouteRows(rows).forEach(function (p) {
       if (!p.metadata || !hasGeo(p)) return;
@@ -959,13 +1116,11 @@
       var lon = Number(p.lon);
       var route = clipAroundPin(p.metadata.route_line, lat, lon, 150);
       var drive = clipAroundPin(p.metadata.gps_line, lat, lon, 150);
-      if (route) {
-        L.polyline(route, { color: '#0f71fa', weight: 5, opacity: 0.9 }).addTo(group);
+      if (drawStroke(group, route, '#0f71fa')) {
         n += 1;
         state.offRouteLegend = true;
       }
-      if (drive) {
-        L.polyline(drive, { color: '#dc2b28', weight: 5, opacity: 0.95 }).addTo(group);
+      if (drawStroke(group, drive, '#dc2b28')) {
         n += 1;
         state.offRouteLegend = true;
       }
@@ -976,13 +1131,11 @@
       var lon = Number(p.lon);
       var road = clipAroundPin(p.metadata.road_line, lat, lon);
       var drive = clipAroundPin(p.metadata.gps_line, lat, lon);
-      if (road) {
-        L.polyline(road, { color: '#7a8589', weight: 5, opacity: 0.9 }).addTo(group);
+      if (drawStroke(group, road, '#7a8589')) {
         n += 1;
         state.missedLegend = true;
       }
-      if (drive) {
-        L.polyline(drive, { color: '#dc2b28', weight: 5, opacity: 0.95 }).addTo(group);
+      if (drawStroke(group, drive, '#dc2b28')) {
         n += 1;
         state.missedLegend = true;
       }
@@ -992,13 +1145,11 @@
       var route = latLngsFromLine(p.metadata.route_line);
       var drive = latLngsFromLine(p.metadata.gps_line);
       var fit = [];
-      if (route) {
-        L.polyline(route, { color: '#0f71fa', weight: 5, opacity: 0.9 }).addTo(group);
+      if (drawStroke(group, route, '#0f71fa')) {
         n += 1;
         fit = fit.concat(route);
       }
-      if (drive) {
-        L.polyline(drive, { color: '#dc2b28', weight: 5, opacity: 0.95 }).addTo(group);
+      if (drawStroke(group, drive, '#dc2b28')) {
         n += 1;
         fit = fit.concat(drive);
       }
@@ -1081,12 +1232,12 @@
     var detourNote = state.detourLegend
       ? '<span class="mr12"><span class="legend-swatch" style="background:#0f71fa"></span>planned route</span><span class="mr12"><span class="legend-swatch" style="background:#dc2b28"></span>actual drive</span>'
       : '';
-    $('map-legend').innerHTML = (legend || 'No points in the current filter. Turn off “Coordinates only” or pick another tab.') + divNote + offRouteNote + missedNote + detourNote;
+    $('map-legend').innerHTML = (legend || 'No points in the current filter.') + divNote + offRouteNote + missedNote + detourNote;
   }
 
   function listFingerprint() {
     var f = currentFilters();
-    return [f.qCode, f.category, f.type, f.sort, f.search, f.severity, f.label, state.traceFile].join('|');
+    return [f.qCode, f.category, (f.types || []).join(','), f.sort, f.search, f.severity, f.label, f.project, f.vehicle, f.user, state.traceFile].join('|');
   }
 
   function saveLastPos(n, id, total) {
@@ -1110,17 +1261,35 @@
   }
 
   function directionsDebugUrl(p) {
-    if (!hasGeo(p)) return '';
-    var lat = Number(p.lat);
-    var lon = Number(p.lon);
+    var line = (p.metadata && p.metadata.gps_line) || [];
+    var start = line.length ? line[0] : (hasGeo(p) ? [Number(p.lon), Number(p.lat)] : null);
+    var end = line.length > 1 ? line[line.length - 1] : null;
+    if (!start) return '';
+    var route = Number(start[0]).toFixed(6) + ',' + Number(start[1]).toFixed(6);
+    if (end && (Math.abs(end[0] - start[0]) > 1e-6 || Math.abs(end[1] - start[1]) > 1e-6)) {
+      route += ';' + Number(end[0]).toFixed(6) + ',' + Number(end[1]).toFixed(6);
+    }
+    var lon = end ? (Number(start[0]) + Number(end[0])) / 2 : Number(start[0]);
+    var lat = end ? (Number(start[1]) + Number(end[1])) / 2 : Number(start[1]);
     var speed = p.problem_type === 'speed_limit_suspect' || p.problem_type === 'speed_limit_missing';
-    var route = lon.toFixed(6) + ',' + lat.toFixed(6);
     var query = 'steps=true&overview=full&geometries=geojson&roundabout_exits=true&voice_units=imperial&language=en&voice_instructions=true&banner_instructions=true&alternatives=true&annotations=duration,speed,current_speed,historical_speed,congestion,maxspeed';
     var debug = speed ? '&debug_layer=valhalla-speed-limits' : '';
     return 'https://console.mapbox.com/directions-debug/#route=' + route +
-      '&map=' + lon.toFixed(5) + ',' + lat.toFixed(5) + ',17z' +
+      '&map=' + lon.toFixed(5) + ',' + lat.toFixed(5) + ',16z' +
       '&server=https://api.mapbox.com&profile=mapbox/driving-traffic&annotation=none&queryparams=' +
       encodeURIComponent(query) + debug;
+  }
+
+  function lvdUrl(p) {
+    if (!hasGeo(p)) return '';
+    return 'https://sites.mapbox.com/lvd-explorer/#17/' +
+      Number(p.lat).toFixed(6) + '/' + Number(p.lon).toFixed(6);
+  }
+
+  function placeLinks(p) {
+    if (!hasGeo(p)) return '';
+    return '<a class="dd-link btn btn--s btn--stroke btn-pill px12" href="' + escapeHtml(directionsDebugUrl(p)) + '" target="_blank" rel="noopener" title="Open this place in Directions Debug">DD</a>' +
+      '<a class="dd-link btn btn--s btn--stroke btn-pill px12" href="' + escapeHtml(lvdUrl(p)) + '" target="_blank" rel="noopener" title="Open this place in LVD Explorer">LVD</a>';
   }
 
   function tagControls(p) {
@@ -1187,9 +1356,7 @@
           return hint ? ' · ' + escapeHtml(hint) : '';
         }()) + '</div>' +
         '</span>' +
-        (hasGeo(p)
-          ? '<a class="dd-link btn btn--s btn--stroke btn-pill px12" href="' + escapeHtml(directionsDebugUrl(p)) + '" target="_blank" rel="noopener" title="Open this place in Directions Debug">DD</a>'
-          : '') +
+        (hasGeo(p) ? placeLinks(p) : '') +
         '</div>';
     });
     if (extra) html += '<div class="txt-s color-gray mt6">Tighten filters to see the rest.</div>';
@@ -1252,7 +1419,8 @@
       '<div class="txt-s mb6">Time: ' + escapeHtml(p.timestamp_utc || '—') + '</div>' +
       '<div class="txt-s mb6">Coords: ' + (hasGeo(p) ? Number(p.lat).toFixed(5) + ', ' + Number(p.lon).toFixed(5) : 'none') +
       (meta.geo_source ? ' <span class="color-gray">(' + escapeHtml(meta.geo_source) + ')</span>' : '') +
-      (hasGeo(p) ? ' <a class="ml6" href="' + escapeHtml(directionsDebugUrl(p)) + '" target="_blank" rel="noopener">Open in DD</a>' : '') + '</div>' +
+      (hasGeo(p) ? ' <a class="ml6" href="' + escapeHtml(directionsDebugUrl(p)) + '" target="_blank" rel="noopener">Open in DD</a>' +
+        ' <a class="ml6" href="' + escapeHtml(lvdUrl(p)) + '" target="_blank" rel="noopener">Open in LVD</a>' : '') + '</div>' +
       '<div class="txt-s mb6">VIN: ' + escapeHtml(p.vehicle || '—') + '</div>' +
       '<div class="txt-s mb6">User: ' + escapeHtml(p.user_id || '—') + '</div>' +
       '<div class="txt-s mb6">Project / platform: ' + escapeHtml(p.project || '—') + ' / ' + escapeHtml(p.platform || '—') + '</div>' +
@@ -1437,56 +1605,105 @@
     var vis = filtered();
     renderKpis(state.problems, vis);
     renderList(vis);
-    renderReviewStats(vis);
+    renderReviewStats();
     renderTracePanel();
     var selected = state.problems.filter(function (p) { return p.problem_id === state.selectedId; })[0];
     if (selected) renderDetail(selected);
   }
 
-  function renderReviewStats(rows) {
+  function validationPool() {
+    var f = currentFilters();
+    var type = state.validationType || '';
+    var scope = {
+      search: f.search,
+      types: [],
+      severity: f.severity,
+      sort: f.sort,
+      label: f.label,
+      project: f.project,
+      platform: f.platform,
+      vehicle: f.vehicle,
+      user: f.user,
+      from: f.from,
+      to: f.to,
+      category: f.category,
+      qCode: f.qCode
+    };
+    return state.problems.filter(function (p) {
+      if (type && p.problem_type !== type) return false;
+      return matches(p, scope);
+    });
+  }
+
+  function fillValidationTypes() {
+    var sel = $('validation-type');
+    if (!sel) return;
+    var values = unique(state.problems, 'problem_type');
+    var keep = state.validationType || '';
+    sel.innerHTML = '';
+    var all = document.createElement('option');
+    all.value = '';
+    all.textContent = 'All types';
+    sel.appendChild(all);
+    values.forEach(function (v) {
+      var o = document.createElement('option');
+      o.value = v;
+      o.textContent = v;
+      sel.appendChild(o);
+    });
+    sel.value = values.indexOf(keep) !== -1 ? keep : '';
+    state.validationType = sel.value;
+  }
+
+  function fixRateText(trueN, total) {
+    if (!total) return '—';
+    var pct = Math.round((trueN / total) * 1000) / 10;
+    return (pct % 1 === 0 ? String(pct.toFixed(0)) : pct.toFixed(1)) + '%';
+  }
+
+  function renderReviewStats() {
     var box = $('review-stats');
     var status = $('review-status');
     if (!box) return;
+    fillValidationTypes();
+    var pool = validationPool();
+    var reviewable = pool.filter(function (p) { return !p.repeat_drop; });
     var tags = { true_detection: 0, false_positive: 0, na: 0 };
-    rows.forEach(function (p) {
+    reviewable.forEach(function (p) {
       var rec = reviewOf(p.problem_id);
       if (rec && tags[rec.tag] != null) tags[rec.tag] += 1;
     });
-    var untagged = rows.length - tags.true_detection - tags.false_positive - tags.na;
+    var traces = {};
+    pool.forEach(function (p) {
+      var key = traceKey(p);
+      if (key) traces[key] = 1;
+    });
+    var untagged = reviewable.length - tags.true_detection - tags.false_positive - tags.na;
     box.innerHTML =
+      statCell('Findings', reviewable.length) +
+      statCell('Trips', Object.keys(traces).length) +
       statCell('True Detection', tags.true_detection) +
       statCell('False positive detection', tags.false_positive) +
       statCell('N/A', tags.na) +
-      statCell('Not tagged', untagged);
+      statCell('Not tagged', untagged) +
+      statCell('Fix Rate', fixRateText(tags.true_detection, reviewable.length), 'True Detection / findings');
     if (!status) return;
     if (state.reviewError) status.textContent = state.reviewError;
     else if (state.reviewLive) {
-      status.textContent = 'Shared with everyone on this server. ' + rows.length + ' findings in this filter. Undo clears a tag so it can be changed.';
+      status.textContent = 'Shared with everyone on this server. Undo clears a tag so it can be changed.';
     } else status.textContent = 'Shared tags are off. Start serve_board.py so every reviewer sees the same tags.';
   }
 
-  function statCell(label, n) {
-    return '<div class="review-stat"><div class="txt-xs color-gray mb6">' + escapeHtml(label) +
-      '</div><div class="num">' + n.toLocaleString() + '</div></div>';
+  function statCell(label, value, note) {
+    var text = typeof value === 'number' ? value.toLocaleString() : String(value);
+    return '<div class="card py18 px18 validation-card">' +
+      '<div class="txt-s color-gray mb6">' + escapeHtml(label) + '</div>' +
+      '<div class="display-3 txt-bold color-gray-dark">' + escapeHtml(text) + '</div>' +
+      (note ? '<div class="txt-s color-gray mt6">' + escapeHtml(note) + '</div>' : '') +
+      '</div>';
   }
 
-  function assignTag(id, tag) {
-    if (!id || !tagMeta(tag)) return;
-    if (reviewOf(id)) return;
-    var name = reviewerName();
-    if (!name) {
-      state.reviewError = 'Enter your name, then set the tag.';
-      var input = $('reviewer-name');
-      if (input) input.focus();
-      renderReviewStats(filtered());
-      return;
-    }
-    try { localStorage.setItem(REVIEWER_KEY, name); } catch (e) {}
-    if (!state.reviewLive) {
-      state.reviewError = 'Shared tags are off. Start serve_board.py and reopen this page.';
-      renderReviewStats(filtered());
-      return;
-    }
+  function postTag(id, tag, name) {
     fetch('/api/reviews', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1509,6 +1726,27 @@
       state.reviewError = 'Could not save the tag. Check that serve_board.py is running.';
       renderReviewStats(filtered());
     });
+  }
+
+  function assignTag(id, tag) {
+    if (!id || !tagMeta(tag)) return;
+    if (reviewOf(id)) return;
+    var name = reviewerName();
+    if (!name) {
+      flashValidator();
+      return;
+    }
+    try { localStorage.setItem(REVIEWER_KEY, name); } catch (e) {}
+    function send() {
+      if (!state.reviewLive) {
+        state.reviewError = 'Shared tags are off. Start serve_board.py and reopen this page.';
+        renderReviewStats(filtered());
+        return;
+      }
+      postTag(id, tag, name);
+    }
+    if (state.reviewLive) send();
+    else syncReviews(false).then(send);
   }
 
   function clearTag(id) {
@@ -1588,9 +1826,8 @@
     if ($('list-sort') && $('filter-sort')) $('list-sort').value = $('filter-sort').value;
     var vis = filtered();
     renderKpis(state.problems, vis);
-    renderQChips(state.problems);
     renderTabs(state.problems);
-    fillSelect($('filter-type'), unique(state.category ? state.problems.filter(function (p) { return p.category === state.category; }) : state.problems, 'problem_type'), 'All types');
+    fillTypeOptions();
     drawMap(vis);
     renderList(vis);
     renderReviewStats(vis);
@@ -1603,7 +1840,7 @@
   }
 
   function bootUi() {
-    fillSelect($('filter-project'), unique(state.problems, 'project'), 'All');
+    fillProjectSelect();
     fillSelect($('filter-platform'), unique(state.problems, 'platform'), 'All');
     $('data-status').textContent = state.problems.length.toLocaleString() + ' findings · ' + state.sourceName;
     state.shouldFit = true;
@@ -1641,14 +1878,33 @@
       ev.target.value = '';
     });
     ['search', 'filter-severity', 'filter-label',
-      'filter-project', 'filter-platform', 'filter-vehicle', 'filter-user', 'filter-from', 'filter-to', 'filter-geo'
+      'filter-project', 'filter-platform', 'filter-vehicle', 'filter-user', 'filter-from', 'filter-to'
     ].forEach(function (id) {
       $(id).addEventListener('input', refresh);
       $(id).addEventListener('change', refresh);
     });
-    $('filter-type').addEventListener('change', function () {
-      applySuggestedSort();
-      refresh();
+    $('type-trigger').addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      var picker = $('type-picker');
+      var open = picker.classList.toggle('is-open');
+      $('type-trigger').setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) syncTypeChecks();
+    });
+    $('type-upload').addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      applyTypes();
+    });
+    $('type-panel').addEventListener('click', function (ev) { ev.stopPropagation(); });
+    document.addEventListener('click', function () {
+      var picker = $('type-picker');
+      if (!picker) return;
+      picker.classList.remove('is-open');
+      $('type-trigger').setAttribute('aria-expanded', 'false');
+    });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'Escape') return;
+      $('type-picker').classList.remove('is-open');
+      $('type-trigger').setAttribute('aria-expanded', 'false');
     });
     function onSortChange(ev) {
       setSort(ev.target.value);
@@ -1656,6 +1912,10 @@
     }
     $('filter-sort').addEventListener('change', onSortChange);
     $('list-sort').addEventListener('change', onSortChange);
+    $('validation-type').addEventListener('change', function () {
+      state.validationType = $('validation-type').value;
+      renderReviewStats();
+    });
     $('trace-finder-go').addEventListener('click', runTraceFinder);
     $('trace-finder').addEventListener('keydown', function (ev) {
       if (ev.key === 'Enter') {
@@ -1663,19 +1923,12 @@
         runTraceFinder();
       }
     });
-    $('q-chips').addEventListener('click', function (e) {
-      var btn = e.target.closest('[data-q]');
-      if (!btn) return;
-      state.qCode = btn.getAttribute('data-q');
-      state.shouldFit = true;
-      applySuggestedSort();
-      refresh();
-    });
     $('category-tabs').addEventListener('click', function (e) {
       var btn = e.target.closest('[data-cat]');
       if (!btn) return;
       state.category = btn.getAttribute('data-cat');
-      $('filter-type').value = '';
+      state.types = [];
+      $('type-picker').classList.remove('is-open');
       state.shouldFit = true;
       applySuggestedSort();
       refresh();
@@ -1742,6 +1995,10 @@
       var changed = JSON.stringify(next) !== JSON.stringify(state.reviews);
       state.reviews = next;
       state.reviewLive = true;
+      var hint = $('validator-hint');
+      if (hint && state.validatorName && !state.reviewError) {
+        hint.textContent = state.validatorName + ' can set tags. They are shared on this server.';
+      }
       if (!changed && !forcePaint) return;
       state.reviewError = '';
       if (state.problems.length) paintReviews();
@@ -1757,11 +2014,20 @@
 
   function initReviewer() {
     var el = $('reviewer-name');
-    if (!el) return;
-    try { el.value = localStorage.getItem(REVIEWER_KEY) || ''; } catch (e) {}
-    el.addEventListener('change', function () {
-      try { localStorage.setItem(REVIEWER_KEY, el.value.trim()); } catch (e) {}
-    });
+    var apply = $('validator-apply');
+    if (el) {
+      try { el.value = localStorage.getItem(REVIEWER_KEY) || ''; } catch (e) {}
+      el.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          applyValidator();
+        }
+      });
+      if (String(el.value || '').trim()) applyValidator();
+    }
+    if (apply) apply.addEventListener('click', applyValidator);
+    var hint = $('validator-hint');
+    if (hint && !reviewerName()) hint.textContent = 'Enter your name and press the check mark before setting a tag.';
   }
 
   bind();
