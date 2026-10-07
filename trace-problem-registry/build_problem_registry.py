@@ -1052,12 +1052,10 @@ def parse_bold_count(body: str, label: str) -> Optional[int]:
 
 
 def q4_div_severity(dist_m: Optional[float]) -> str:
-    # GPS mismatch is a positioning symptom, not a map-data defect.
-    if dist_m is None:
-        return "low"
-    if dist_m >= 15:
-        return "medium"
-    return "low"
+    # GPS divergence is high or medium. It is never low.
+    if dist_m is not None and dist_m >= 15:
+        return "high"
+    return "medium"
 
 
 def parse_q4(body: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:

@@ -33,6 +33,8 @@ def save_reviews(reviews):
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump({"reviews": reviews}, handle, indent=2)
         handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(tmp, REVIEWS)
 
 
