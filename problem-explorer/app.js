@@ -912,6 +912,13 @@
       attribution: '&copy; OpenStreetMap'
     }).addTo(map);
     overlayLayer = L.layerGroup().addTo(map);
+    state.arrowsOn = arrowsVisible();
+    map.on('zoomend', function () {
+      var on = arrowsVisible();
+      if (on === state.arrowsOn) return;
+      state.arrowsOn = on;
+      if (state.problems.length) drawDivergenceLines(filtered());
+    });
     setTimeout(function () { map.invalidateSize(); }, 80);
   }
 
@@ -1062,8 +1069,12 @@
     };
   }
 
+  function arrowsVisible() {
+    return !!(map && map.getZoom() >= 16);
+  }
+
   function addFlowArrows(latlngs, group) {
-    if (!latlngs || latlngs.length < 2) return;
+    if (!arrowsVisible() || !latlngs || latlngs.length < 2) return;
     var cum = [0];
     for (var i = 1; i < latlngs.length; i++) {
       cum.push(cum[i - 1] + haversineM(latlngs[i - 1][0], latlngs[i - 1][1], latlngs[i][0], latlngs[i][1]));
@@ -1074,7 +1085,7 @@
       var spot = spotAlong(latlngs, cum, total * frac);
       var icon = L.divIcon({
         className: 'line-arrow',
-        html: '<div style="transform:rotate(' + spot.deg.toFixed(0) + 'deg)"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><polygon points="7,1 13,13 1,13" fill="#111111"/></svg></div>',
+        html: '<div style="transform:rotate(' + spot.deg.toFixed(0) + 'deg)"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><polygon points="7,1 13,13 1,13" fill="#4e545a"/></svg></div>',
         iconSize: [14, 14],
         iconAnchor: [7, 7]
       });
@@ -1260,22 +1271,38 @@
     return null;
   }
 
+  function offsetMeters(lat, lon, eastM, northM) {
+    var dLat = northM / 111320;
+    var dLon = eastM / (111320 * Math.cos(lat * Math.PI / 180));
+    return [lon + dLon, lat + dLat];
+  }
+
   function directionsDebugUrl(p) {
-    var line = (p.metadata && p.metadata.gps_line) || [];
-    var start = line.length ? line[0] : (hasGeo(p) ? [Number(p.lon), Number(p.lat)] : null);
-    var end = line.length > 1 ? line[line.length - 1] : null;
-    if (!start) return '';
-    var route = Number(start[0]).toFixed(6) + ',' + Number(start[1]).toFixed(6);
-    if (end && (Math.abs(end[0] - start[0]) > 1e-6 || Math.abs(end[1] - start[1]) > 1e-6)) {
-      route += ';' + Number(end[0]).toFixed(6) + ',' + Number(end[1]).toFixed(6);
+    if (!hasGeo(p)) return '';
+    var lat = Number(p.lat);
+    var lon = Number(p.lon);
+    var meta = p.metadata || {};
+    var line = meta.gps_line || meta.matched_line || meta.route_line || meta.road_line;
+    var clipped = clipAroundPin(line, lat, lon, 150);
+    var start = null;
+    var end = null;
+    if (clipped && clipped.length >= 2) {
+      start = [clipped[0][1], clipped[0][0]];
+      end = [clipped[clipped.length - 1][1], clipped[clipped.length - 1][0]];
     }
-    var lon = end ? (Number(start[0]) + Number(end[0])) / 2 : Number(start[0]);
-    var lat = end ? (Number(start[1]) + Number(end[1])) / 2 : Number(start[1]);
+    if (!start || !end || (Math.abs(end[0] - start[0]) < 1e-5 && Math.abs(end[1] - start[1]) < 1e-5)) {
+      start = offsetMeters(lat, lon, -150, 0);
+      end = offsetMeters(lat, lon, 150, 0);
+    }
+    var route = Number(start[0]).toFixed(6) + ',' + Number(start[1]).toFixed(6) + ';' +
+      Number(end[0]).toFixed(6) + ',' + Number(end[1]).toFixed(6);
+    var midLon = (Number(start[0]) + Number(end[0])) / 2;
+    var midLat = (Number(start[1]) + Number(end[1])) / 2;
     var speed = p.problem_type === 'speed_limit_suspect' || p.problem_type === 'speed_limit_missing';
     var query = 'steps=true&overview=full&geometries=geojson&roundabout_exits=true&voice_units=imperial&language=en&voice_instructions=true&banner_instructions=true&alternatives=true&annotations=duration,speed,current_speed,historical_speed,congestion,maxspeed';
     var debug = speed ? '&debug_layer=valhalla-speed-limits' : '';
     return 'https://console.mapbox.com/directions-debug/#route=' + route +
-      '&map=' + lon.toFixed(5) + ',' + lat.toFixed(5) + ',16z' +
+      '&map=' + midLon.toFixed(5) + ',' + midLat.toFixed(5) + ',16z' +
       '&server=https://api.mapbox.com&profile=mapbox/driving-traffic&annotation=none&queryparams=' +
       encodeURIComponent(query) + debug;
   }
